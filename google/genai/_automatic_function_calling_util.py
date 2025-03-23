@@ -17,7 +17,7 @@ import inspect
 import sys
 import types as builtin_types
 import typing
-from typing import _GenericAlias, Any, Callable, get_args, get_origin, Literal, Union
+from typing import _GenericAlias, Any, Callable, get_args, get_origin, Literal, Optional, Union  # type: ignore[attr-defined]
 
 import pydantic
 
@@ -31,27 +31,19 @@ else:
   VersionedUnionType = typing._UnionGenericAlias
 
 _py_builtin_type_to_schema_type = {
-    str: 'STRING',
-    int: 'INTEGER',
-    float: 'NUMBER',
-    bool: 'BOOLEAN',
-    list: 'ARRAY',
-    dict: 'OBJECT',
+    str: types.Type.STRING,
+    int: types.Type.INTEGER,
+    float: types.Type.NUMBER,
+    bool: types.Type.BOOLEAN,
+    list: types.Type.ARRAY,
+    dict: types.Type.OBJECT,
 }
 
 
 def _is_builtin_primitive_or_compound(
-    annotation: inspect.Parameter.annotation,
+    annotation: inspect.Parameter.annotation,  # type: ignore[valid-type]
 ) -> bool:
   return annotation in _py_builtin_type_to_schema_type.keys()
-
-
-def _raise_for_any_of_if_mldev(schema: types.Schema):
-  if schema.any_of:
-    raise ValueError(
-        'AnyOf is not supported in function declaration schema for'
-        ' the Gemini API.'
-    )
 
 
 def _raise_for_default_if_mldev(schema: types.Schema):
@@ -64,12 +56,11 @@ def _raise_for_default_if_mldev(schema: types.Schema):
 
 def _raise_if_schema_unsupported(api_option: Literal['VERTEX_AI', 'GEMINI_API'], schema: types.Schema):
   if api_option == 'GEMINI_API':
-    _raise_for_any_of_if_mldev(schema)
     _raise_for_default_if_mldev(schema)
 
 
 def _is_default_value_compatible(
-    default_value: Any, annotation: inspect.Parameter.annotation
+    default_value: Any, annotation: inspect.Parameter.annotation  # type: ignore[valid-type]
 ) -> bool:
   # None type is expected to be handled external to this function
   if _is_builtin_primitive_or_compound(annotation):
@@ -145,7 +136,7 @@ def _parse_schema_from_parameter(
           for arg in get_args(param.annotation)
       )
   ):
-    schema.type = 'OBJECT'
+    schema.type = _py_builtin_type_to_schema_type[dict]
     schema.any_of = []
     unique_types = set()
     for arg in get_args(param.annotation):
@@ -183,7 +174,7 @@ def _parse_schema_from_parameter(
     origin = get_origin(param.annotation)
     args = get_args(param.annotation)
     if origin is dict:
-      schema.type = 'OBJECT'
+      schema.type = _py_builtin_type_to_schema_type[dict]
       if param.default is not inspect.Parameter.empty:
         if not _is_default_value_compatible(param.default, param.annotation):
           raise ValueError(default_value_error_msg)
@@ -195,7 +186,7 @@ def _parse_schema_from_parameter(
         raise ValueError(
             f'Literal type {param.annotation} must be a list of strings.'
         )
-      schema.type = 'STRING'
+      schema.type = _py_builtin_type_to_schema_type[str]
       schema.enum = list(args)
       if param.default is not inspect.Parameter.empty:
         if not _is_default_value_compatible(param.default, param.annotation):
@@ -204,7 +195,7 @@ def _parse_schema_from_parameter(
       _raise_if_schema_unsupported(api_option, schema)
       return schema
     if origin is list:
-      schema.type = 'ARRAY'
+      schema.type = _py_builtin_type_to_schema_type[list]
       schema.items = _parse_schema_from_parameter(
           api_option,
           inspect.Parameter(
@@ -222,7 +213,7 @@ def _parse_schema_from_parameter(
       return schema
     if origin is Union:
       schema.any_of = []
-      schema.type = 'OBJECT'
+      schema.type = _py_builtin_type_to_schema_type[dict]
       unique_types = set()
       for arg in args:
         # The first check is for NoneType in Python 3.9, since the __name__
@@ -280,7 +271,7 @@ def _parse_schema_from_parameter(
         and param.default is not None
     ):
       schema.default = param.default
-    schema.type = 'OBJECT'
+    schema.type = _py_builtin_type_to_schema_type[dict]
     schema.properties = {}
     for field_name, field_info in param.annotation.model_fields.items():
       schema.properties[field_name] = _parse_schema_from_parameter(
@@ -292,8 +283,7 @@ def _parse_schema_from_parameter(
           ),
           func_name,
       )
-    if api_option == 'VERTEX_AI':
-      schema.required = _get_required_fields(schema)
+    schema.required = _get_required_fields(schema)
     _raise_if_schema_unsupported(api_option, schema)
     return schema
   raise ValueError(
@@ -304,9 +294,9 @@ def _parse_schema_from_parameter(
   )
 
 
-def _get_required_fields(schema: types.Schema) -> list[str]:
+def _get_required_fields(schema: types.Schema) -> Optional[list[str]]:
   if not schema.properties:
-    return
+    return None
   return [
       field_name
       for field_name, field_schema in schema.properties.items()

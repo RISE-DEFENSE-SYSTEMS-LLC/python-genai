@@ -45,7 +45,17 @@ def test_name_transform_name(client):
       raise ValueError('No files found with a `download_uri`.')
 
     file_id = file.name.split('/')[-1]
-    for f in [file, file_id, file.name, file.uri, file.download_uri]:
+    video = types.Video(uri=file.download_uri)
+    generated_video = types.GeneratedVideo(video=video)
+    for f in [
+        file,
+        file_id,
+        file.name,
+        file.uri,
+        file.download_uri,
+        video,
+        generated_video,
+    ]:
       name = t.t_file_name(client, f)
       assert name == file_id
 

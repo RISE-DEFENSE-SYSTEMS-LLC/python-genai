@@ -13,12 +13,17 @@
 # limitations under the License.
 #
 
+import base64
 import enum
+import os
 
+import PIL.Image
 from pydantic import BaseModel, ValidationError, Field
-from typing import List, Optional, Union
+from typing import Literal, List, Optional, Union
+from datetime import datetime
 import pytest
 import json
+import logging
 import sys
 from ... import _transformers as t
 from ... import errors
@@ -26,6 +31,13 @@ from ... import types
 from .. import pytest_helper
 from enum import Enum
 
+IMAGE_PNG_FILE_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), '../data/google.png')
+)
+image_png = PIL.Image.open(IMAGE_PNG_FILE_PATH)
+
+with open(IMAGE_PNG_FILE_PATH, 'rb') as image_file:
+  image_bytes = image_file.read()
 
 safety_settings_with_method = [
     {
@@ -205,7 +217,6 @@ test_table: list[pytest_helper.TestTableItem] = [
                 'frequency_penalty': 0.5,
             },
         ),
-        exception_if_mldev='400',
     ),
     pytest_helper.TestTableItem(
         name='test_google_search_tool',
@@ -409,6 +420,38 @@ def test_simple_config(client):
   assert response.text
 
 
+def test_sdk_logger_logs_warnings(client, caplog):
+  caplog.set_level(logging.DEBUG, logger='gemini_sdk_logger')
+  sdk_logger = logging.getLogger('gemini_sdk_logger')
+  sdk_logger.setLevel(logging.WARNING)
+  response = client.models.generate_content(
+      model='gemini-1.5-flash',
+      contents='Tell me a 50 word story about cheese.',
+      config={
+        'candidate_count': 2,
+      }
+  )
+  assert response.text
+  assert 'WARNING' in caplog.text
+  assert 'there are 2 candidates' in caplog.text
+
+
+def test_response_create_time_and_response_id(client):
+  if client.vertexai:
+    response = client.models.generate_content(
+        model='gemini-2.0-flash',
+        contents='What is your name?',
+        config={
+            'max_output_tokens': 3,
+            'top_k': 2,
+        },
+    )
+    # create_time and response_id are not supported in mldev
+    assert response.create_time
+    assert response.response_id
+    assert isinstance(response.create_time, datetime)
+
+
 def test_safety_settings(client):
   response = client.models.generate_content(
       model='gemini-1.5-flash',
@@ -516,6 +559,26 @@ def test_pydantic_schema(client):
   assert isinstance(response.parsed, CountryInfo)
 
 
+def test_pydantic_schema_orders_properties(client):
+  class Restaurant(BaseModel):
+    name: str
+    rating: int
+    fun_fact: str
+
+  response = client.models.generate_content(
+      model='gemini-1.5-flash',
+      contents='Give me information about a restaurant in Boston.',
+      config={
+          'response_mime_type': 'application/json',
+          'response_schema': Restaurant,
+      },
+  )
+  response_text_json = json.loads(response.text)
+  response_keys = list(response_text_json.keys())
+  assert response_keys[0] == 'name'
+  assert response_keys == list(Restaurant.model_fields.keys())
+
+
 def test_pydantic_schema_with_default_value(client):
   class Restaurant(BaseModel):
     name: str
@@ -590,6 +653,77 @@ def test_nested_list_of_int_schema(client):
   assert isinstance(response.parsed[0][0][0], int)
 
 
+def test_literal_schema(client):
+  response = client.models.generate_content(
+      model='gemini-1.5-flash',
+      contents='Which ice cream flavor should I order?',
+      config={
+          'response_mime_type': 'application/json',
+          'response_schema': Literal['chocolate', 'vanilla', 'cookie dough'],
+      },
+  )
+
+  allowed_values = ['chocolate', 'vanilla', 'cookie dough']
+  assert isinstance(response.parsed, str)
+  assert response.parsed in allowed_values
+
+
+def test_literal_schema_with_non_string_types_raises(client):
+  with pytest.raises(ValueError) as e:
+    client.models.generate_content(
+        model='gemini-1.5-flash',
+        contents='Which ice cream flavor should I order?',
+        config={
+            'response_mime_type': 'application/json',
+            'response_schema': Literal['chocolate', 'vanilla', 1],
+        },
+    )
+  assert 'validation error' in str(e)
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 10),
+    reason='| is not supported in Python 3.9',
+)
+def test_pydantic_schema_with_literal(client):
+  class Movie(BaseModel):
+    name: str
+    genre: Literal['action', 'comedy', 'drama']
+
+  response = client.models.generate_content(
+      model='gemini-1.5-flash',
+      contents='Give me information about the movie "Mean Girls"',
+      config={
+          'response_mime_type': 'application/json',
+          'response_schema': Movie,
+      },
+  )
+  assert isinstance(response.parsed, Movie)
+  assert isinstance(response.parsed.genre, str)
+  assert response.parsed.genre in ['action', 'comedy', 'drama']
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 10),
+    reason='| is not supported in Python 3.9',
+)
+def test_pydantic_schema_with_single_value_literal(client):
+  class Movie(BaseModel):
+    name: str
+    genre: Literal['action']
+
+  response = client.models.generate_content(
+      model='gemini-1.5-flash',
+      contents='Give me information about the movie "The Matrix"',
+      config={
+          'response_mime_type': 'application/json',
+          'response_schema': Movie,
+      },
+  )
+  assert isinstance(response.parsed, Movie)
+  assert response.parsed.genre == 'action'
+
+
 @pytest.mark.skipif(
     sys.version_info < (3, 10),
     reason='| is not supported in Python 3.9',
@@ -640,8 +774,6 @@ def test_pydantic_schema_from_json(client):
 
   schema = types.Schema.model_validate(CountryInfo.model_json_schema())
 
-  print(schema)
-
   response = client.models.generate_content(
       model='gemini-1.5-flash',
       contents='Give me information of the United States.',
@@ -651,7 +783,7 @@ def test_pydantic_schema_from_json(client):
       ),
   )
 
-  print(response.text)
+  assert response.text
 
 
 @pytest.mark.skipif(
@@ -659,31 +791,27 @@ def test_pydantic_schema_from_json(client):
     reason='| is not supported in Python 3.9',
 )
 def test_schema_with_union_type(client):
-  # TODO(b/392920967): any_of is not supported in mldev
-  with pytest_helper.exception_if_mldev(client, ValueError):
-    response = client.models.generate_content(
-        model='gemini-1.5-flash',
-        contents='Give me a random number, either as an integers or written out as words.',
-        config=types.GenerateContentConfig.model_validate(dict(
-            response_mime_type='application/json',
-            response_schema=int | str,
-        ))
-    )
-    assert type(response.parsed) in (int, str)
+  response = client.models.generate_content(
+      model='gemini-1.5-flash',
+      contents='Give me a random number, either as an integers or written out as words.',
+      config=types.GenerateContentConfig.model_validate(dict(
+          response_mime_type='application/json',
+          response_schema=int | str,
+      ))
+  )
+  assert type(response.parsed) in (int, str)
 
 
 def test_schema_with_union_type_all_py_versions(client):
-  # TODO(b/392920967): any_of is not supported in mldev
-  with pytest_helper.exception_if_mldev(client, ValueError):
-    response = client.models.generate_content(
-        model='gemini-1.5-flash',
-        contents="Give me a random number, either an integer or a float.",
-        config={
-            'response_mime_type': 'application/json',
-            'response_schema': Union[int, float],
-        },
-    )
-    assert type(response.parsed) in (int, float)
+  response = client.models.generate_content(
+      model='gemini-1.5-flash',
+      contents="Give me a random number, either an integer or a float.",
+      config={
+          'response_mime_type': 'application/json',
+          'response_schema': Union[int, float],
+      },
+  )
+  assert type(response.parsed) in (int, float)
 
 
 @pytest.mark.skipif(
@@ -691,53 +819,29 @@ def test_schema_with_union_type_all_py_versions(client):
     reason='| is not supported in Python 3.9',
 )
 def test_list_schema_with_union_type(client):
-  if client._api_client.vertexai:
-    response = client.models.generate_content(
-        model='gemini-1.5-flash',
-        contents='Give me a list of 5 random numbers, including some integers and some written out as words.',
-        config=types.GenerateContentConfig(
-            response_mime_type='application/json',
-            response_schema=list[int | str],
-        )
-    )
-    for item in response.parsed:
-      assert isinstance(item, int) or isinstance(item, str)
-  else:
-    with pytest.raises(ValueError) as e:
-      client.models.generate_content(
-          model='gemini-1.5-flash',
-          contents='Give me a random number, either as an integers or written out as words.',
-          config=types.GenerateContentConfig(
-              response_mime_type='application/json',
-              response_schema=list[int | str],
-          )
+  response = client.models.generate_content(
+      model='gemini-1.5-flash',
+      contents='Give me a list of 5 random numbers, including some integers and some written out as words.',
+      config=types.GenerateContentConfig(
+          response_mime_type='application/json',
+          response_schema=list[int | str],
       )
-    assert 'AnyOf is not supported' in str(e)
+  )
+  for item in response.parsed:
+    assert isinstance(item, int) or isinstance(item, str)
 
 
 def test_list_schema_with_union_type_all_py_versions(client):
-  if client._api_client.vertexai:
-    response = client.models.generate_content(
-        model='gemini-1.5-flash',
-        contents='Give me a list of 5 random numbers, including some integers and some written out as words.',
-        config=types.GenerateContentConfig(
-            response_mime_type='application/json',
-            response_schema=list[Union[int, str]],
-        )
-    )
-    for item in response.parsed:
-      assert isinstance(item, int) or isinstance(item, str)
-  else:
-    with pytest.raises(ValueError) as e:
-      client.models.generate_content(
-          model='gemini-1.5-flash',
-          contents='Give me a random number, either as an integers or written out as words.',
-          config=types.GenerateContentConfig(
-              response_mime_type='application/json',
-              response_schema=list[Union[int, str]],
-          )
+  response = client.models.generate_content(
+      model='gemini-1.5-flash',
+      contents='Give me a list of 5 random numbers, including some integers and some written out as words.',
+      config=types.GenerateContentConfig(
+          response_mime_type='application/json',
+          response_schema=list[Union[int, str]],
       )
-    assert 'AnyOf is not supported' in str(e)
+  )
+  for item in response.parsed:
+    assert isinstance(item, int) or isinstance(item, str)
 
 
 def test_pydantic_schema_with_optional_generic_alias(client):
@@ -897,17 +1001,16 @@ def test_pydantic_schema_with_union_type(client):
     name: str
     restaurants_per_capita: int | float
 
-  with pytest_helper.exception_if_mldev(client, ValueError):
-    response = client.models.generate_content(
-        model='gemini-1.5-flash',
-        contents='Give me information for the United States',
-        config=types.GenerateContentConfig(
-            response_mime_type='application/json',
-            response_schema=CountryInfo,
-        )
-    )
-    assert isinstance(response.parsed, CountryInfo)
-    assert type(response.parsed.restaurants_per_capita) in (int, float)
+  response = client.models.generate_content(
+      model='gemini-1.5-flash',
+      contents='Give me information for the United States',
+      config=types.GenerateContentConfig(
+          response_mime_type='application/json',
+          response_schema=CountryInfo,
+      )
+  )
+  assert isinstance(response.parsed, CountryInfo)
+  assert type(response.parsed.restaurants_per_capita) in (int, float)
 
 
 def test_pydantic_schema_with_union_type_all_py_versions(client):
@@ -916,17 +1019,16 @@ def test_pydantic_schema_with_union_type_all_py_versions(client):
     name: str
     restaurants_per_capita: Union[int, float]
 
-  with pytest_helper.exception_if_mldev(client, ValueError):
-    response = client.models.generate_content(
-        model='gemini-1.5-flash',
-        contents='Give me information for the United States',
-        config=types.GenerateContentConfig(
-            response_mime_type='application/json',
-            response_schema=CountryInfo,
-        )
-    )
-    assert isinstance(response.parsed, CountryInfo)
-    assert type(response.parsed.restaurants_per_capita) in (int, float)
+  response = client.models.generate_content(
+      model='gemini-1.5-flash',
+      contents='Give me information for the United States',
+      config=types.GenerateContentConfig(
+          response_mime_type='application/json',
+          response_schema=CountryInfo,
+      )
+  )
+  assert isinstance(response.parsed, CountryInfo)
+  assert type(response.parsed.restaurants_per_capita) in (int, float)
 
 
 @pytest.mark.skipif(
@@ -943,16 +1045,15 @@ def test_union_of_pydantic_schema(client):
   class FunFact(BaseModel):
     fun_fact: str
 
-  with pytest_helper.exception_if_mldev(client, ValueError):
-      response = client.models.generate_content(
-          model='gemini-1.5-flash',
-          contents='Can you give me a Taylor Swift song lyric or a fun fact?',
-          config=types.GenerateContentConfig(
-              response_mime_type='application/json',
-              response_schema=SongLyric | FunFact,
-          )
+  response = client.models.generate_content(
+      model='gemini-1.5-flash',
+      contents='Can you give me a Taylor Swift song lyric or a fun fact?',
+      config=types.GenerateContentConfig(
+          response_mime_type='application/json',
+          response_schema=SongLyric | FunFact,
       )
-      assert type(response.parsed) in (SongLyric, FunFact)
+  )
+  assert type(response.parsed) in (SongLyric, FunFact)
 
 
 def test_union_of_pydantic_schema_all_py_versions(client):
@@ -965,16 +1066,15 @@ def test_union_of_pydantic_schema_all_py_versions(client):
   class FunFact(BaseModel):
     fun_fact: str
 
-  with pytest_helper.exception_if_mldev(client, ValueError):
-      response = client.models.generate_content(
-          model='gemini-1.5-flash',
-          contents='Can you give me a Taylor Swift song lyric or a fun fact?',
-          config=types.GenerateContentConfig(
-              response_mime_type='application/json',
-              response_schema=Union[SongLyric, FunFact],
-          )
+  response = client.models.generate_content(
+      model='gemini-1.5-flash',
+      contents='Can you give me a Taylor Swift song lyric or a fun fact?',
+      config=types.GenerateContentConfig(
+          response_mime_type='application/json',
+          response_schema=Union[SongLyric, FunFact],
       )
-      assert type(response.parsed) in (SongLyric, FunFact)
+  )
+  assert type(response.parsed) in (SongLyric, FunFact)
 
 
 def test_pydantic_schema_with_nested_enum(client):
@@ -1269,6 +1369,138 @@ def test_json_schema_with_lower_enum(client):
   assert isinstance(response.parsed, dict)
 
 
+def test_json_schema_with_any_of(client):
+  response = client.models.generate_content(
+      model='gemini-1.5-flash',
+      contents='Give me a fruit basket.',
+      config={
+          'response_mime_type': 'application/json',
+          'response_schema': {
+              'type': 'OBJECT',
+              'title': 'Fruit Basket',
+              'description': 'A structured representation of a fruit basket',
+              'required': ['fruit'],
+              'properties': {
+                  'fruit': {
+                      'type': 'ARRAY',
+                      'description': (
+                          'An ordered list of the fruit in the basket'
+                      ),
+                      'items': {
+                          'description': 'A piece of fruit',
+                          'any_of': [
+                              {
+                                  'title': 'Apple',
+                                  'description': 'Describes an apple',
+                                  'type': 'OBJECT',
+                                  'properties': {
+                                      'type': {
+                                          'type': 'STRING',
+                                          'description': "Always 'apple'",
+                                      },
+                                      'color': {
+                                          'type': 'STRING',
+                                          'description': (
+                                              'The color of the apple (e.g.,'
+                                              " 'red')"
+                                          ),
+                                      },
+                                  },
+                                  'property_ordering': ['type', 'color'],
+                                  'required': ['type', 'color'],
+                              },
+                              {
+                                  'title': 'Orange',
+                                  'description': 'Describes an orange',
+                                  'type': 'OBJECT',
+                                  'properties': {
+                                      'type': {
+                                          'type': 'STRING',
+                                          'description': "Always 'orange'",
+                                      },
+                                      'size': {
+                                          'type': 'STRING',
+                                          'description': (
+                                              'The size of the orange (e.g.,'
+                                              " 'medium')"
+                                          ),
+                                      },
+                                  },
+                                  'property_ordering': ['type', 'size'],
+                                  'required': ['type', 'size'],
+                              },
+                          ],
+                      },
+                  }
+              },
+          },
+      },
+  )
+  assert isinstance(response.parsed, dict)
+  assert 'fruit' in response.parsed
+  assert isinstance(response.parsed['fruit'], list)
+  assert 'type' in response.parsed['fruit'][0]
+
+
+def test_schema_with_any_of(client):
+  response_schema=types.Schema(
+      type=types.Type.OBJECT,
+      title='Fruit Basket',
+      description='A structured representation of a fruit basket',
+      properties={
+          'fruit': types.Schema(
+              type=types.Type.ARRAY,
+              description='An ordered list of the fruit in the basket',
+              items=types.Schema(
+                  any_of=[
+                      types.Schema(
+                          title='Apple',
+                          description='Describes an apple',
+                          type=types.Type.OBJECT,
+                          properties={
+                              'type': types.Schema(type=types.Type.STRING, description='Always "apple"'),
+                              'variety': types.Schema(
+                                  type=types.Type.STRING,
+                                  description='The variety of apple (e.g., "Granny Smith")',
+                              ),
+                          },
+                          property_ordering=['type', 'variety'],
+                          required=['type', 'variety'],
+                      ),
+                      types.Schema(
+                          title='Orange',
+                          description='Describes an orange',
+                          type=types.Type.OBJECT,
+                          properties={
+                              'type': types.Schema(type=types.Type.STRING, description='Always "orange"'),
+                              'variety': types.Schema(
+                                  type=types.Type.STRING,
+                                  description='The variety of orange (e.g.,"Navel orange")',
+                              ),
+                          },
+                          property_ordering=['type', 'variety'],
+                          required=['type', 'variety'],
+                      ),
+                  ],
+              ),
+          ),
+      },
+      required=['fruit'],
+  )
+  response = client.models.generate_content(
+      model='gemini-1.5-flash',
+      contents='Give me a fruit basket.',
+      config=types.GenerateContentConfig(
+          response_mime_type='application/json',
+          response_schema=response_schema,
+      ),
+  )
+  assert isinstance(response.parsed, dict)
+  assert 'fruit' in response.parsed
+  assert isinstance(response.parsed['fruit'], list)
+  assert 'type' in response.parsed['fruit'][0]
+
+
 def test_json_schema_with_streaming(client):
 
   response = client.models.generate_content_stream(
@@ -1294,7 +1526,7 @@ def test_json_schema_with_streaming(client):
   for r in response:
     parts = r.candidates[0].content.parts
     for p in parts:
-      print(p.text)
+      assert p.text
 
 
 def test_pydantic_schema_with_streaming(client):
@@ -1320,7 +1552,7 @@ def test_pydantic_schema_with_streaming(client):
   for r in response:
     parts = r.candidates[0].content.parts
     for p in parts:
-      print(p.text)
+      assert p.text
 
 
 def test_schema_from_json(client):
@@ -1341,7 +1573,7 @@ def test_schema_from_json(client):
       ),
   )
 
-  print(response.text)
+  assert response.text
 
 
 def test_schema_from_model_schema(client):
@@ -1360,15 +1592,16 @@ def test_schema_from_model_schema(client):
       ),
   )
 
-  print(response.text)
+  response.text
 
 
 def test_function(client):
   def get_weather(city: str) -> str:
+    """Returns the weather in a city."""
     return f'The weather in {city} is sunny and 100 degrees.'
 
   response = client.models.generate_content(
-      model='gemini-1.5-flash',
+      model='gemini-2.0-flash',
       contents=(
           'What is the weather like in Sunnyvale? Answer in very short'
           ' sentence.'
@@ -1445,4 +1678,148 @@ def test_catch_stack_trace_in_error_handling(client):
     #         }]
     #     }
     # }
-    assert e.details == {'code': 400, 'message': '', 'status': 'UNKNOWN'}
+    if 'error' in e.details:
+      details = e.details['error']
+    else:
+      details = e.details
+    assert details['code'] == 400
+    assert details['status'] == 'INVALID_ARGUMENT'
+
+
+def test_multiple_strings(client):
+  class SummaryResponses(BaseModel):
+    summary: str
+    person: str
+
+  response = client.models.generate_content(
+      model='gemini-1.5-flash',
+      contents=[
+          "Summarize Shakespeare's life work in a few sentences",
+          "Summarize Hemingway's life work",
+      ],
+      config={
+          'response_mime_type': 'application/json',
+          'response_schema': list[SummaryResponses],
+      },
+  )
+
+  assert 'Shakespeare' in response.text
+  assert 'Hemingway' in response.text
+  assert 'Shakespeare' in response.parsed[0].person
+  assert 'Hemingway' in response.parsed[1].person
+
+
+def test_multiple_parts(client):
+  class SummaryResponses(BaseModel):
+    summary: str
+    person: str
+
+  response = client.models.generate_content(
+      model='gemini-1.5-flash',
+      contents=[
+          types.Part(
+              text="Summarize Shakespeare's life work in a few sentences"
+          ),
+          types.Part(text="Summarize Hemingway's life work"),
+      ],
+      config={
+          'response_mime_type': 'application/json',
+          'response_schema': list[SummaryResponses],
+      },
+  )
+
+  assert 'Shakespeare' in response.text
+  assert 'Hemingway' in response.text
+  assert 'Shakespeare' in  response.parsed[0].person
+  assert 'Hemingway' in response.parsed[1].person
+
+
+def test_multiple_function_calls(client):
+  response = client.models.generate_content(
+      model='gemini-1.5-flash',
+      contents=[
+          'What is the weather in Boston?',
+          'What is the stock price of GOOG?',
+          types.Part.from_function_call(
+              name='get_weather',
+              args={'location': 'Boston'},
+          ),
+          types.Part.from_function_call(
+              name='get_stock_price',
+              args={'symbol': 'GOOG'},
+          ),
+          types.Part.from_function_response(
+              name='get_weather',
+              response={'response': 'It is sunny and 100 degrees.'},
+          ),
+          types.Part.from_function_response(
+              name='get_stock_price',
+              response={'response': 'The stock price is $100.'},
+          ),
+      ],
+      config=types.GenerateContentConfig(
+          tools=[
+              types.Tool(
+                  function_declarations=[
+                      types.FunctionDeclaration(
+                          name='get_weather',
+                          description='Get the weather in a city.',
+                          parameters=types.Schema(
+                              type=types.Type.OBJECT,
+                              properties={
+                                  'location': types.Schema(
+                                      type=types.Type.STRING
+                                  )
+                              },
+                          ),
+                      ),
+                      types.FunctionDeclaration(
+                          name='get_stock_price',
+                          description='Get the stock price of a symbol.',
+                          parameters=types.Schema(
+                              type=types.Type.OBJECT,
+                              properties={
+                                  'symbol': types.Schema(
+                                      type=types.Type.STRING
+                                  )
+                              },
+                          ),
+                      ),
+                  ]
+              ),
+          ]
+      ),
+  )
+
+  assert 'Boston' in response.text
+  assert 'sunny' in response.text
+  assert '100 degrees' in response.text
+  assert '$100' in response.text
+
+def test_usage_metadata_part_types(client):
+  contents = [
+      'Hello world.',
+      types.Part.from_bytes(
+          data=image_bytes,
+          mime_type='image/png',
+      ),
+  ]
+
+  response = client.models.generate_content(
+      model='gemini-1.5-flash', contents=contents
+  )
+  usage_metadata = response.usage_metadata
+
+  assert usage_metadata.candidates_token_count
+  assert usage_metadata.candidates_tokens_details
+  modalities = sorted(
+      [d.modality.name for d in usage_metadata.candidates_tokens_details]
+  )
+  assert modalities == ['TEXT']
+
+  assert usage_metadata.prompt_token_count
+  assert usage_metadata.prompt_tokens_details
+  modalities = sorted(
+      [d.modality.name for d in usage_metadata.prompt_tokens_details]
+  )
+  assert modalities == ['IMAGE', 'TEXT']

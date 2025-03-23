@@ -20,7 +20,7 @@ import datetime
 import enum
 import functools
 import typing
-from typing import Union
+from typing import Any, Union
 import uuid
 import warnings
 
@@ -60,6 +60,12 @@ def set_value_by_path(data, keys, value):
         for d in data[key_name]:
           set_value_by_path(d, keys[i + 1 :], value)
       return
+    elif key.endswith('[0]'):
+      key_name = key[:-3]
+      if key_name not in data:
+        data[key_name] = [{}]
+      set_value_by_path(data[key_name][0], keys[i + 1 :], value)
+      return
 
     data = data.setdefault(key, {})
 
@@ -87,7 +93,7 @@ def set_value_by_path(data, keys, value):
     data[keys[-1]] = value
 
 
-def get_value_by_path(data: object, keys: list[str]):
+def get_value_by_path(data: Any, keys: list[str]):
   """Examples:
 
   get_value_by_path({'a': {'b': v}}, ['a', 'b'])
@@ -106,6 +112,12 @@ def get_value_by_path(data: object, keys: list[str]):
         return [get_value_by_path(d, keys[i + 1 :]) for d in data[key_name]]
       else:
         return None
+    elif key.endswith('[0]'):
+      key_name = key[:-3]
+      if key_name in data and data[key_name]:
+        return get_value_by_path(data[key_name][0], keys[i + 1 :])
+      else:
+        return None
     else:
       if key in data:
         data = data[key]
@@ -116,7 +128,7 @@ def get_value_by_path(data: object, keys: list[str]):
   return data
 
 
-def convert_to_dict(obj: dict[str, object]) -> dict[str, object]:
+def convert_to_dict(obj: object) -> Any:
   """Recursively converts a given object to a dictionary.
 
   If the object is a Pydantic model, it uses the model's `model_dump()` method.
@@ -125,7 +137,9 @@ def convert_to_dict(obj: dict[str, object]) -> dict[str, object]:
     obj: The object to convert.
 
   Returns:
-    A dictionary representation of the object.
+    A dictionary representation of the object, a list of objects if a list is
+    passed, or the object itself if it is not a dictionary, list, or Pydantic
+    model.
   """
   if isinstance(obj, pydantic.BaseModel):
     return obj.model_dump(exclude_none=True)
@@ -138,7 +152,7 @@ def convert_to_dict(obj: dict[str, object]) -> dict[str, object]:
 
 
 def _remove_extra_fields(
-    model: pydantic.BaseModel, response: dict[str, object]
+    model: Any, response: dict[str, object]
 ) -> None:
   """Removes extra fields from the response that are not in the model.
 
@@ -176,6 +190,8 @@ def _remove_extra_fields(
         if isinstance(item, dict):
           _remove_extra_fields(typing.get_args(annotation)[0], item)
 
+T = typing.TypeVar('T', bound='BaseModel')
+
 
 class BaseModel(pydantic.BaseModel):
 
@@ -189,12 +205,13 @@ class BaseModel(pydantic.BaseModel):
       arbitrary_types_allowed=True,
       ser_json_bytes='base64',
       val_json_bytes='base64',
+      ignored_types=(typing.TypeVar,)
   )
 
   @classmethod
   def _from_response(
-      cls, response: dict[str, object], kwargs: dict[str, object]
-  ) -> 'BaseModel':
+      cls: typing.Type[T], *, response: dict[str, object], kwargs: dict[str, object]
+  ) -> T:
     # To maintain forward compatibility, we need to remove extra fields from
     # the response.
     # We will provide another mechanism to allow users to access these fields.
@@ -254,7 +271,7 @@ def encode_unserializable_types(data: dict[str, object]) -> dict[str, object]:
     A dictionary with json.dumps() incompatible type (e.g. bytes datetime)
     to compatible type (e.g. base64 encoded string, isoformat date string).
   """
-  processed_data = {}
+  processed_data: dict[str, object] = {}
   if not isinstance(data, dict):
     return data
   for key, value in data.items():

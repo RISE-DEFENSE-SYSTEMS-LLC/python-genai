@@ -16,8 +16,8 @@
 """Error classes for the GenAI SDK."""
 
 from typing import Any, Optional, TYPE_CHECKING, Union
-
-import requests
+import httpx
+import json
 
 
 if TYPE_CHECKING:
@@ -27,26 +27,32 @@ if TYPE_CHECKING:
 class APIError(Exception):
   """General errors raised by the GenAI API."""
   code: int
-  response: requests.Response
+  response: Union['ReplayResponse', httpx.Response]
 
   status: Optional[str] = None
   message: Optional[str] = None
-  response: Optional[Any] = None
 
   def __init__(
-      self, code: int, response: Union[requests.Response, 'ReplayResponse']
+      self,
+      code: int,
+      response: Union['ReplayResponse', httpx.Response],
   ):
     self.response = response
-
-    if isinstance(response, requests.Response):
+    message = None
+    if isinstance(response, httpx.Response):
       try:
-        # do not do any extra muanipulation on the response.
-        # return the raw response json as is.
         response_json = response.json()
-      except requests.exceptions.JSONDecodeError:
+      except (json.decoder.JSONDecodeError):
+        message = response.text
         response_json = {
-            'message': response.text,
-            'status': response.reason,
+            'message': message,
+            'status': response.reason_phrase,
+        }
+      except httpx.ResponseNotRead:
+        message = 'Response not read'
+        response_json = {
+            'message': message,
+            'status': response.reason_phrase,
         }
     else:
       response_json = response.body_segments[0].get('error', {})
@@ -89,7 +95,7 @@ class APIError(Exception):
 
   @classmethod
   def raise_for_response(
-      cls, response: Union[requests.Response, 'ReplayResponse']
+      cls, response: Union['ReplayResponse', httpx.Response]
   ):
     """Raises an error with detailed error message if the response has an error status."""
     if response.status_code == 200:

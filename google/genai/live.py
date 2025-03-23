@@ -20,9 +20,10 @@ import base64
 import contextlib
 import json
 import logging
-from typing import AsyncIterator, Optional, Sequence, Union
+from typing import Any, AsyncIterator, Dict, Optional, Sequence, Union, get_args
 
 import google.auth
+import pydantic
 from websockets import ConnectionClosed
 
 from . import _api_module
@@ -31,7 +32,7 @@ from . import _transformers as t
 from . import client
 from . import errors
 from . import types
-from ._api_client import ApiClient
+from ._api_client import BaseApiClient
 from ._common import experimental_warning
 from ._common import get_value_by_path as getv
 from ._common import set_value_by_path as setv
@@ -49,12 +50,14 @@ from .models import _Tool_to_mldev
 from .models import _Tool_to_vertex
 
 try:
-  from websockets.asyncio.client import ClientConnection
-  from websockets.asyncio.client import connect
+  from websockets.asyncio.client import ClientConnection  # type: ignore
+  from websockets.asyncio.client import connect  # type: ignore
 except ModuleNotFoundError:
-  from websockets.client import ClientConnection
-  from websockets.client import connect
+  # This try/except is for TAP, mypy complains about it which is why we have the type: ignore
+  from websockets.client import ClientConnection  # type: ignore
+  from websockets.client import connect  # type: ignore
 
+logger = logging.getLogger('google_genai.live')
 
 _FUNCTION_RESPONSE_REQUIRES_ID = (
     'FunctionResponse request must have an `id` field from the'
@@ -65,22 +68,26 @@ _FUNCTION_RESPONSE_REQUIRES_ID = (
 class AsyncSession:
   """AsyncSession. The live module is experimental."""
 
-  def __init__(self, api_client: client.ApiClient, websocket: ClientConnection):
+  def __init__(
+      self, api_client: client.BaseApiClient, websocket: ClientConnection
+  ):
     self._api_client = api_client
     self._ws = websocket
 
   async def send(
       self,
       *,
-      input: Union[
-          types.ContentListUnion,
-          types.ContentListUnionDict,
-          types.LiveClientContentOrDict,
-          types.LiveClientRealtimeInputOrDict,
-          types.LiveClientToolResponseOrDict,
-          types.FunctionResponseOrDict,
-          Sequence[types.FunctionResponseOrDict],
-      ],
+      input: Optional[
+          Union[
+              types.ContentListUnion,
+              types.ContentListUnionDict,
+              types.LiveClientContentOrDict,
+              types.LiveClientRealtimeInputOrDict,
+              types.LiveClientToolResponseOrDict,
+              types.FunctionResponseOrDict,
+              Sequence[types.FunctionResponseOrDict],
+          ]
+      ] = None,
       end_of_turn: Optional[bool] = False,
   ):
     """Send input to the model.
@@ -165,7 +172,7 @@ class AsyncSession:
         stream = read_audio()
         for data in stream:
           yield data
-      async with client.aio.live.connect(model='...') as session:
+      async with client.aio.live.connect(model='...', config=config) as session:
         for audio in session.start_stream(stream = audio_stream(),
         mime_type = 'audio/pcm'):
           play_audio_chunk(audio.data)
@@ -205,7 +212,7 @@ class AsyncSession:
       try:
         response = json.loads(raw_response)
       except json.decoder.JSONDecodeError:
-        raise ValueError(f'Failed to parse response: {raw_response}')
+        raise ValueError(f'Failed to parse response: {raw_response!r}')
     else:
       response = {}
     if self._api_client.vertexai:
@@ -214,7 +221,7 @@ class AsyncSession:
       response_dict = self._LiveServerMessage_from_mldev(response)
 
     return types.LiveServerMessage._from_response(
-        response_dict, parameter_model
+        response=response_dict, kwargs=parameter_model.model_dump()
     )
 
   async def _send_loop(
@@ -224,8 +231,10 @@ class AsyncSession:
       stop_event: asyncio.Event,
   ):
     async for data in data_stream:
-      input = {'data': data, 'mimeType': mime_type}
-      await self.send(input=input)
+      model_input = types.LiveClientRealtimeInput(
+        media_chunks=[types.Blob(data=data, mime_type=mime_type)]
+      )
+      await self.send(input=model_input)
       # Give a chance for the receive loop to process responses.
       await asyncio.sleep(10**-12)
     # Give a chance for the receiver to process the last response.
@@ -234,8 +243,8 @@ class AsyncSession:
   def _LiveServerContent_from_mldev(
       self,
       from_object: Union[dict, object],
-  ) -> dict:
-    to_object = {}
+  ) -> Dict[str, Any]:
+    to_object: dict[str, Any] = {}
     if getv(from_object, ['modelTurn']) is not None:
       setv(
           to_object,
@@ -254,8 +263,8 @@ class AsyncSession:
   def _LiveToolCall_from_mldev(
       self,
       from_object: Union[dict, object],
-  ) -> dict:
-    to_object = {}
+  ) -> Dict[str, Any]:
+    to_object: dict[str, Any] = {}
     if getv(from_object, ['functionCalls']) is not None:
       setv(
           to_object,
@@ -267,8 +276,8 @@ class AsyncSession:
   def _LiveToolCall_from_vertex(
       self,
       from_object: Union[dict, object],
-  ) -> dict:
-    to_object = {}
+  ) -> Dict[str, Any]:
+    to_object: dict[str, Any] = {}
     if getv(from_object, ['functionCalls']) is not None:
       setv(
           to_object,
@@ -280,8 +289,8 @@ class AsyncSession:
   def _LiveServerMessage_from_mldev(
       self,
       from_object: Union[dict, object],
-  ) -> dict:
-    to_object = {}
+  ) -> Dict[str, Any]:
+    to_object: dict[str, Any] = {}
     if getv(from_object, ['serverContent']) is not None:
       setv(
           to_object,
@@ -307,8 +316,8 @@ class AsyncSession:
   def _LiveServerContent_from_vertex(
       self,
       from_object: Union[dict, object],
-  ) -> dict:
-    to_object = {}
+  ) -> Dict[str, Any]:
+    to_object: dict[str, Any] = {}
     if getv(from_object, ['modelTurn']) is not None:
       setv(
           to_object,
@@ -327,8 +336,8 @@ class AsyncSession:
   def _LiveServerMessage_from_vertex(
       self,
       from_object: Union[dict, object],
-  ) -> dict:
-    to_object = {}
+  ) -> Dict[str, Any]:
+    to_object: dict[str, Any] = {}
     if getv(from_object, ['serverContent']) is not None:
       setv(
           to_object,
@@ -354,116 +363,300 @@ class AsyncSession:
 
   def _parse_client_message(
       self,
-      input: Union[
-          types.ContentListUnion,
-          types.ContentListUnionDict,
-          types.LiveClientContentOrDict,
-          types.LiveClientRealtimeInputOrDict,
-          types.LiveClientRealtimeInputOrDict,
-          types.LiveClientToolResponseOrDict,
-          types.FunctionResponseOrDict,
-          Sequence[types.FunctionResponseOrDict],
-      ],
+      input: Optional[
+          Union[
+              types.ContentListUnion,
+              types.ContentListUnionDict,
+              types.LiveClientContentOrDict,
+              types.LiveClientRealtimeInputOrDict,
+              types.LiveClientToolResponseOrDict,
+              types.FunctionResponseOrDict,
+              Sequence[types.FunctionResponseOrDict],
+          ]
+      ] = None,
       end_of_turn: Optional[bool] = False,
-  ) -> dict:
+  ) -> types.LiveClientMessageDict:
+
+    formatted_input: Any = input
+
+    if not input:
+      logging.info('No input provided. Assume it is the end of turn.')
+      return {'client_content': {'turn_complete': True}}
     if isinstance(input, str):
-      input = [input]
+      formatted_input = [input]
     elif isinstance(input, dict) and 'data' in input:
-      if isinstance(input['data'], bytes):
-        decoded_data = base64.b64encode(input['data']).decode('utf-8')
-        input['data'] = decoded_data
-      input = [input]
+      try:
+        blob_input = types.Blob(**input)
+      except pydantic.ValidationError:
+        raise ValueError(
+            f'Unsupported input type "{type(input)}" or input content "{input}"'
+        )
+      if (
+          isinstance(blob_input, types.Blob)
+          and isinstance(blob_input.data, bytes)
+      ):
+        formatted_input = [
+            blob_input.model_dump(mode='json', exclude_none=True)
+        ]
     elif isinstance(input, types.Blob):
-      input.data = base64.b64encode(input.data).decode('utf-8')
-      input = [input]
+      formatted_input = [input]
     elif isinstance(input, dict) and 'name' in input and 'response' in input:
       # ToolResponse.FunctionResponse
       if not (self._api_client.vertexai) and 'id' not in input:
         raise ValueError(_FUNCTION_RESPONSE_REQUIRES_ID)
-      input = [input]
+      formatted_input = [input]
 
-    if isinstance(input, Sequence) and any(
-        isinstance(c, dict) and 'name' in c and 'response' in c for c in input
+    if isinstance(formatted_input, Sequence) and any(
+        isinstance(c, dict) and 'name' in c and 'response' in c
+        for c in formatted_input
     ):
       # ToolResponse.FunctionResponse
-      if not (self._api_client.vertexai):
-        for item in input:
-          if 'id' not in item:
+      function_responses_input = []
+      for item in formatted_input:
+        if isinstance(item, dict):
+          try:
+            function_response_input = types.FunctionResponse(**item)
+          except pydantic.ValidationError:
+            raise ValueError(
+                f'Unsupported input type "{type(input)}" or input content'
+                f' "{input}"'
+            )
+          if (
+              function_response_input.id is None
+              and not self._api_client.vertexai
+          ):
             raise ValueError(_FUNCTION_RESPONSE_REQUIRES_ID)
-      client_message = {'tool_response': {'function_responses': input}}
-    elif isinstance(input, Sequence) and any(isinstance(c, str) for c in input):
-      to_object = {}
+          else:
+            function_response_dict = function_response_input.model_dump(
+                exclude_none=True, mode='json'
+            )
+            function_response_typeddict = types.FunctionResponseDict(
+                name=function_response_dict.get('name'),
+                response=function_response_dict.get('response'),
+            )
+            if function_response_dict.get('id'):
+              function_response_typeddict['id'] = function_response_dict.get(
+                  'id'
+              )
+            function_responses_input.append(function_response_typeddict)
+      client_message = types.LiveClientMessageDict(
+          tool_response=types.LiveClientToolResponseDict(
+              function_responses=function_responses_input
+          )
+      )
+    elif isinstance(formatted_input, Sequence) and any(
+        isinstance(c, str) for c in formatted_input
+    ):
+      to_object: dict[str, Any] = {}
+      content_input_parts: list[types.PartUnion] = []
+      for item in formatted_input:
+        if isinstance(item, get_args(types.PartUnion)):
+          content_input_parts.append(item)
       if self._api_client.vertexai:
         contents = [
             _Content_to_vertex(self._api_client, item, to_object)
-            for item in t.t_contents(self._api_client, input)
+            for item in t.t_contents(self._api_client, content_input_parts)
         ]
       else:
         contents = [
             _Content_to_mldev(self._api_client, item, to_object)
-            for item in t.t_contents(self._api_client, input)
+            for item in t.t_contents(self._api_client, content_input_parts)
         ]
 
-      client_message = {
-          'client_content': {'turns': contents, 'turn_complete': end_of_turn}
-      }
-    elif isinstance(input, Sequence):
-      if any((isinstance(b, dict) and 'data' in b) for b in input):
+      content_dict_list: list[types.ContentDict] = []
+      for item in contents:
+        try:
+          content_input = types.Content(**item)
+        except pydantic.ValidationError:
+          raise ValueError(
+              f'Unsupported input type "{type(input)}" or input content'
+              f' "{input}"'
+          )
+        content_dict_list.append(
+            types.ContentDict(
+                parts=content_input.model_dump(exclude_none=True, mode='json')[
+                    'parts'
+                ],
+                role=content_input.role,
+            )
+        )
+
+      client_message = types.LiveClientMessageDict(
+          client_content=types.LiveClientContentDict(
+              turns=content_dict_list, turn_complete=end_of_turn
+          )
+      )
+    elif isinstance(formatted_input, Sequence):
+      if any((isinstance(b, dict) and 'data' in b) for b in formatted_input):
         pass
-      elif any(isinstance(b, types.Blob) for b in input):
-        input = [b.model_dump(exclude_none=True) for b in input]
+      elif any(isinstance(b, types.Blob) for b in formatted_input):
+        formatted_input = [
+            b.model_dump(exclude_none=True, mode='json')
+            for b in formatted_input
+        ]
       else:
         raise ValueError(
             f'Unsupported input type "{type(input)}" or input content "{input}"'
         )
 
-      client_message = {'realtime_input': {'media_chunks': input}}
+      client_message = types.LiveClientMessageDict(
+          realtime_input=types.LiveClientRealtimeInputDict(
+              media_chunks=formatted_input
+          )
+      )
 
-    elif isinstance(input, dict) and 'content' in input:
-      # TODO(b/365983264) Add validation checks for content_update input_dict.
-      client_message = {'client_content': input}
-    elif isinstance(input, types.LiveClientRealtimeInput):
-      client_message = {'realtime_input': input.model_dump(exclude_none=True)}
-      if isinstance(
-          client_message['realtime_input']['media_chunks'][0]['data'], bytes
+    elif isinstance(formatted_input, dict):
+      if 'content' in formatted_input or 'turns' in formatted_input:
+        # TODO(b/365983264) Add validation checks for content_update input_dict.
+        if 'turns' in formatted_input:
+          content_turns = formatted_input['turns']
+        else:
+          content_turns = formatted_input['content']
+        client_message = types.LiveClientMessageDict(
+            client_content=types.LiveClientContentDict(
+                turns=content_turns,
+                turn_complete=formatted_input.get('turn_complete'),
+            )
+        )
+      elif 'media_chunks' in formatted_input:
+        try:
+          realtime_input = types.LiveClientRealtimeInput(**formatted_input)
+        except pydantic.ValidationError:
+          raise ValueError(
+              f'Unsupported input type "{type(input)}" or input content'
+              f' "{input}"'
+          )
+        client_message = types.LiveClientMessageDict(
+            realtime_input=types.LiveClientRealtimeInputDict(
+                media_chunks=realtime_input.model_dump(
+                    exclude_none=True, mode='json'
+                )['media_chunks']
+            )
+        )
+      elif 'function_responses' in formatted_input:
+        try:
+          tool_response_input = types.LiveClientToolResponse(**formatted_input)
+        except pydantic.ValidationError:
+          raise ValueError(
+              f'Unsupported input type "{type(input)}" or input content'
+              f' "{input}"'
+          )
+        client_message = types.LiveClientMessageDict(
+            tool_response=types.LiveClientToolResponseDict(
+                function_responses=tool_response_input.model_dump(
+                    exclude_none=True, mode='json'
+                )['function_responses']
+            )
+        )
+      else:
+        raise ValueError(
+            f'Unsupported input type "{type(input)}" or input content "{input}"'
+        )
+    elif isinstance(formatted_input, types.LiveClientRealtimeInput):
+      realtime_input_dict = formatted_input.model_dump(
+          exclude_none=True, mode='json'
+      )
+      client_message = types.LiveClientMessageDict(
+          realtime_input=types.LiveClientRealtimeInputDict(
+              media_chunks=realtime_input_dict.get('media_chunks')
+          )
+      )
+      if (
+          client_message['realtime_input'] is not None
+          and client_message['realtime_input']['media_chunks'] is not None
+          and isinstance(
+              client_message['realtime_input']['media_chunks'][0]['data'], bytes
+          )
       ):
-        client_message['realtime_input']['media_chunks'] = [
-            {
-                'data': base64.b64encode(item['data']).decode('utf-8'),
-                'mime_type': item['mime_type'],
-            }
-            for item in client_message['realtime_input']['media_chunks']
-        ]
+        formatted_media_chunks: list[types.BlobDict] = []
+        for item in client_message['realtime_input']['media_chunks']:
+          if isinstance(item, dict):
+            try:
+              blob_input = types.Blob(**item)
+            except pydantic.ValidationError:
+              raise ValueError(
+                  f'Unsupported input type "{type(input)}" or input content'
+                  f' "{input}"'
+              )
+            if (
+                isinstance(blob_input, types.Blob)
+                and isinstance(blob_input.data, bytes)
+                and blob_input.data is not None
+            ):
+              formatted_media_chunks.append(
+                  types.BlobDict(
+                      data=base64.b64decode(blob_input.data),
+                      mime_type=blob_input.mime_type,
+                  )
+              )
 
-    elif isinstance(input, types.LiveClientContent):
-      client_message = {'client_content': input.model_dump(exclude_none=True)}
-    elif isinstance(input, types.LiveClientToolResponse):
+        client_message['realtime_input'][
+            'media_chunks'
+        ] = formatted_media_chunks
+
+    elif isinstance(formatted_input, types.LiveClientContent):
+      client_content_dict = formatted_input.model_dump(
+          exclude_none=True, mode='json'
+      )
+      client_message = types.LiveClientMessageDict(
+          client_content=types.LiveClientContentDict(
+              turns=client_content_dict.get('turns'),
+              turn_complete=client_content_dict.get('turn_complete'),
+          )
+      )
+    elif isinstance(formatted_input, types.LiveClientToolResponse):
       # ToolResponse.FunctionResponse
-      if not (self._api_client.vertexai) and not (
-          input.function_responses[0].id
+      if (
+          not (self._api_client.vertexai)
+          and formatted_input.function_responses is not None
+          and not (formatted_input.function_responses[0].id)
       ):
         raise ValueError(_FUNCTION_RESPONSE_REQUIRES_ID)
-      client_message = {'tool_response': input.model_dump(exclude_none=True)}
-    elif isinstance(input, types.FunctionResponse):
-      if not (self._api_client.vertexai) and not (input.id):
+      client_message = types.LiveClientMessageDict(
+          tool_response=types.LiveClientToolResponseDict(
+              function_responses=formatted_input.model_dump(
+                  exclude_none=True, mode='json'
+              ).get('function_responses')
+          )
+      )
+    elif isinstance(formatted_input, types.FunctionResponse):
+      if not (self._api_client.vertexai) and not (formatted_input.id):
         raise ValueError(_FUNCTION_RESPONSE_REQUIRES_ID)
-      client_message = {
-          'tool_response': {
-              'function_responses': [input.model_dump(exclude_none=True)]
-          }
-      }
-    elif isinstance(input, Sequence) and isinstance(
-        input[0], types.FunctionResponse
+      function_response_dict = formatted_input.model_dump(
+          exclude_none=True, mode='json'
+      )
+      function_response_typeddict = types.FunctionResponseDict(
+          name=function_response_dict.get('name'),
+          response=function_response_dict.get('response'),
+      )
+      if function_response_dict.get('id'):
+        function_response_typeddict['id'] = function_response_dict.get('id')
+      client_message = types.LiveClientMessageDict(
+          tool_response=types.LiveClientToolResponseDict(
+              function_responses=[function_response_typeddict]
+          )
+      )
+    elif isinstance(formatted_input, Sequence) and isinstance(
+        formatted_input[0], types.FunctionResponse
     ):
-      if not (self._api_client.vertexai) and not (input[0].id):
+      if not (self._api_client.vertexai) and not (formatted_input[0].id):
         raise ValueError(_FUNCTION_RESPONSE_REQUIRES_ID)
-      client_message = {
-          'tool_response': {
-              'function_responses': [
-                  c.model_dump(exclude_none=True) for c in input
-              ]
-          }
-      }
+      function_response_list: list[types.FunctionResponseDict] = []
+      for item in formatted_input:
+        function_response_dict = item.model_dump(exclude_none=True, mode='json')
+        function_response_typeddict = types.FunctionResponseDict(
+            name=function_response_dict.get('name'),
+            response=function_response_dict.get('response'),
+        )
+        if function_response_dict.get('id'):
+          function_response_typeddict['id'] = function_response_dict.get('id')
+        function_response_list.append(function_response_typeddict)
+      client_message = types.LiveClientMessageDict(
+          tool_response=types.LiveClientToolResponseDict(
+              function_responses=function_response_list
+          )
+      )
+
     else:
       raise ValueError(
           f'Unsupported input type "{type(input)}" or input content "{input}"'
@@ -480,39 +673,35 @@ class AsyncLive(_api_module.BaseModule):
   """AsyncLive. The live module is experimental."""
 
   def _LiveSetup_to_mldev(
-      self, model: str, config: Optional[types.LiveConnectConfigOrDict] = None
+      self, model: str, config: Optional[types.LiveConnectConfig] = None
   ):
-    if isinstance(config, types.LiveConnectConfig):
-      from_object = config.model_dump(exclude_none=True)
-    else:
-      from_object = config
 
-    to_object = {}
-    if getv(from_object, ['generation_config']) is not None:
+    to_object: dict[str, Any] = {}
+    if getv(config, ['generation_config']) is not None:
       setv(
           to_object,
           ['generationConfig'],
           _GenerateContentConfig_to_mldev(
               self._api_client,
-              getv(from_object, ['generation_config']),
+              getv(config, ['generation_config']),
               to_object,
           ),
       )
-    if getv(from_object, ['response_modalities']) is not None:
+    if getv(config, ['response_modalities']) is not None:
       if getv(to_object, ['generationConfig']) is not None:
-        to_object['generationConfig']['responseModalities'] = from_object[
-            'response_modalities'
-        ]
+        to_object['generationConfig']['responseModalities'] = getv(
+            config, ['response_modalities']
+        )
       else:
         to_object['generationConfig'] = {
-            'responseModalities': from_object['response_modalities']
+            'responseModalities': getv(config, ['response_modalities'])
         }
-    if getv(from_object, ['speech_config']) is not None:
+    if getv(config, ['speech_config']) is not None:
       if getv(to_object, ['generationConfig']) is not None:
         to_object['generationConfig']['speechConfig'] = _SpeechConfig_to_mldev(
             self._api_client,
             t.t_speech_config(
-                self._api_client, getv(from_object, ['speech_config'])
+                self._api_client, getv(config, ['speech_config'])
             ),
             to_object,
         )
@@ -521,31 +710,33 @@ class AsyncLive(_api_module.BaseModule):
             'speechConfig': _SpeechConfig_to_mldev(
                 self._api_client,
                 t.t_speech_config(
-                    self._api_client, getv(from_object, ['speech_config'])
+                    self._api_client, getv(config, ['speech_config'])
                 ),
                 to_object,
             )
         }
 
-    if getv(from_object, ['system_instruction']) is not None:
+    if getv(config, ['system_instruction']) is not None:
       setv(
           to_object,
           ['systemInstruction'],
           _Content_to_mldev(
               self._api_client,
               t.t_content(
-                  self._api_client, getv(from_object, ['system_instruction'])
+                  self._api_client, getv(config, ['system_instruction'])
               ),
               to_object,
           ),
       )
-    if getv(from_object, ['tools']) is not None:
+    if getv(config, ['tools']) is not None:
       setv(
           to_object,
           ['tools'],
           [
-              _Tool_to_mldev(self._api_client, item, to_object)
-              for item in getv(from_object, ['tools'])
+              _Tool_to_mldev(
+                  self._api_client, t.t_tool(self._api_client, item), to_object
+              )
+              for item in t.t_tools(self._api_client, getv(config, ['tools']))
           ],
       )
 
@@ -554,33 +745,29 @@ class AsyncLive(_api_module.BaseModule):
     return return_value
 
   def _LiveSetup_to_vertex(
-      self, model: str, config: Optional[types.LiveConnectConfigOrDict] = None
+      self, model: str, config: Optional[types.LiveConnectConfig] = None
   ):
-    if isinstance(config, types.LiveConnectConfig):
-      from_object = config.model_dump(exclude_none=True)
-    else:
-      from_object = config
 
-    to_object = {}
+    to_object: dict[str, Any] = {}
 
-    if getv(from_object, ['generation_config']) is not None:
+    if getv(config, ['generation_config']) is not None:
       setv(
           to_object,
           ['generationConfig'],
           _GenerateContentConfig_to_vertex(
               self._api_client,
-              getv(from_object, ['generation_config']),
+              getv(config, ['generation_config']),
               to_object,
           ),
       )
-    if getv(from_object, ['response_modalities']) is not None:
+    if getv(config, ['response_modalities']) is not None:
       if getv(to_object, ['generationConfig']) is not None:
-        to_object['generationConfig']['responseModalities'] = from_object[
-            'response_modalities'
-        ]
+        to_object['generationConfig']['responseModalities'] = getv(
+            config, ['response_modalities']
+        )
       else:
         to_object['generationConfig'] = {
-            'responseModalities': from_object['response_modalities']
+            'responseModalities': getv(config, ['response_modalities'])
         }
     else:
       # Set default to AUDIO to align with MLDev API.
@@ -590,12 +777,12 @@ class AsyncLive(_api_module.BaseModule):
         to_object.update(
             {'generationConfig': {'responseModalities': ['AUDIO']}}
         )
-    if getv(from_object, ['speech_config']) is not None:
+    if getv(config, ['speech_config']) is not None:
       if getv(to_object, ['generationConfig']) is not None:
         to_object['generationConfig']['speechConfig'] = _SpeechConfig_to_vertex(
             self._api_client,
             t.t_speech_config(
-                self._api_client, getv(from_object, ['speech_config'])
+                self._api_client, getv(config, ['speech_config'])
             ),
             to_object,
         )
@@ -604,30 +791,32 @@ class AsyncLive(_api_module.BaseModule):
             'speechConfig': _SpeechConfig_to_vertex(
                 self._api_client,
                 t.t_speech_config(
-                    self._api_client, getv(from_object, ['speech_config'])
+                    self._api_client, getv(config, ['speech_config'])
                 ),
                 to_object,
             )
         }
-    if getv(from_object, ['system_instruction']) is not None:
+    if getv(config, ['system_instruction']) is not None:
       setv(
           to_object,
           ['systemInstruction'],
           _Content_to_vertex(
               self._api_client,
               t.t_content(
-                  self._api_client, getv(from_object, ['system_instruction'])
+                  self._api_client, getv(config, ['system_instruction'])
               ),
               to_object,
           ),
       )
-    if getv(from_object, ['tools']) is not None:
+    if getv(config, ['tools']) is not None:
       setv(
           to_object,
           ['tools'],
           [
-              _Tool_to_vertex(self._api_client, item, to_object)
-              for item in getv(from_object, ['tools'])
+              _Tool_to_vertex(
+                  self._api_client, t.t_tool(self._api_client, item), to_object
+              )
+              for item in t.t_tools(self._api_client, getv(config, ['tools']))
           ],
       )
 
@@ -636,7 +825,7 @@ class AsyncLive(_api_module.BaseModule):
     return return_value
 
   @experimental_warning(
-      "The live API is experimental and may change in future versions.",
+      'The live API is experimental and may change in future versions.',
   )
   @contextlib.asynccontextmanager
   async def connect(
@@ -644,7 +833,7 @@ class AsyncLive(_api_module.BaseModule):
       *,
       model: str,
       config: Optional[types.LiveConnectConfigOrDict] = None,
-  ) -> AsyncSession:
+  ) -> AsyncIterator[AsyncSession]:
     """Connect to the live server.
 
     The live module is experimental.
@@ -661,16 +850,39 @@ class AsyncLive(_api_module.BaseModule):
           print(message)
     """
     base_url = self._api_client._websocket_base_url()
+    transformed_model = t.t_model(self._api_client, model)
+    # Ensure the config is a LiveConnectConfig.
+    if config is None:
+      parameter_model = types.LiveConnectConfig()
+    elif isinstance(config, dict):
+      if config.get('system_instruction') is None:
+        system_instruction = None
+      else:
+        system_instruction = t.t_content(
+            self._api_client, config.get('system_instruction')
+        )
+      parameter_model = types.LiveConnectConfig(
+          generation_config=config.get('generation_config'),
+          response_modalities=config.get('response_modalities'),
+          speech_config=config.get('speech_config'),
+          system_instruction=system_instruction,
+          tools=config.get('tools'),
+      )
+    else:
+      parameter_model = config
+
     if self._api_client.api_key:
       api_key = self._api_client.api_key
-      version = self._api_client._http_options['api_version']
+      version = self._api_client._http_options.api_version
       uri = f'{base_url}/ws/google.ai.generativelanguage.{version}.GenerativeService.BidiGenerateContent?key={api_key}'
-      headers = self._api_client._http_options['headers']
-
-      transformed_model = t.t_model(self._api_client, model)
-      request = json.dumps(
-          self._LiveSetup_to_mldev(model=transformed_model, config=config)
+      headers = self._api_client._http_options.headers
+      request_dict = _common.convert_to_dict(
+          self._LiveSetup_to_mldev(
+              model=transformed_model,
+              config=parameter_model,
+          )
       )
+      request = json.dumps(request_dict)
     else:
       # Get bearer token through Application Default Credentials.
       creds, _ = google.auth.default(
@@ -682,26 +894,29 @@ class AsyncLive(_api_module.BaseModule):
       auth_req = google.auth.transport.requests.Request()
       creds.refresh(auth_req)
       bearer_token = creds.token
-      headers = {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer {}'.format(bearer_token),
-      }
-      version = self._api_client._http_options['api_version']
+      headers = self._api_client._http_options.headers
+      if headers is not None:
+        headers.update({
+            'Authorization': 'Bearer {}'.format(bearer_token),
+        })
+      version = self._api_client._http_options.api_version
       uri = f'{base_url}/ws/google.cloud.aiplatform.{version}.LlmBidiService/BidiGenerateContent'
       location = self._api_client.location
       project = self._api_client.project
-      transformed_model = t.t_model(self._api_client, model)
       if transformed_model.startswith('publishers/'):
         transformed_model = (
             f'projects/{project}/locations/{location}/' + transformed_model
         )
-
-      request = json.dumps(
-          self._LiveSetup_to_vertex(model=transformed_model, config=config)
+      request_dict = _common.convert_to_dict(
+          self._LiveSetup_to_vertex(
+              model=transformed_model,
+              config=parameter_model,
+          )
       )
+      request = json.dumps(request_dict)
 
     async with connect(uri, additional_headers=headers) as ws:
       await ws.send(request)
-      logging.info(await ws.recv(decode=False))
+      logger.info(await ws.recv(decode=False))
 
       yield AsyncSession(api_client=self._api_client, websocket=ws)

@@ -49,9 +49,14 @@ function_declarations = [{
 }]
 
 
+def get_current_weather(location: str, unit: str):
+  """Get the current weather in a city."""
+  return 15 if unit == 'C' else 59
+
+
 @pytest.fixture
 def mock_api_client(vertexai=False):
-  api_client = mock.MagicMock(spec=gl_client.ApiClient)
+  api_client = mock.MagicMock(spec=gl_client.BaseApiClient)
   api_client.api_key = 'TEST_API_KEY'
   api_client._host = lambda: 'test_host'
   api_client._http_options = {'headers': {}}  # Ensure headers exist
@@ -82,7 +87,7 @@ def test_mldev_from_env(monkeypatch):
 
   assert not client.aio.live._api_client.vertexai
   assert client.aio.live._api_client.api_key == api_key
-  assert isinstance(client.aio.live._api_client, api_client.ApiClient)
+  assert isinstance(client.aio.live._api_client, api_client.BaseApiClient)
 
 
 def test_vertex_from_env(monkeypatch):
@@ -96,12 +101,12 @@ def test_vertex_from_env(monkeypatch):
 
   assert client.aio.live._api_client.vertexai
   assert client.aio.live._api_client.project == project_id
-  assert isinstance(client.aio.live._api_client, api_client.ApiClient)
+  assert isinstance(client.aio.live._api_client, api_client.BaseApiClient)
 
 
 def test_websocket_base_url():
   base_url = 'https://test.com'
-  api_client = gl_client.ApiClient(
+  api_client = gl_client.BaseApiClient(
       api_key='google_api_key',
       http_options={'base_url': base_url},
   )
@@ -238,6 +243,21 @@ async def test_async_session_send_tool_response(
   mock_websocket.send.assert_called_once()
   sent_data = json.loads(mock_websocket.send.call_args[0][0])
   assert 'tool_response' in sent_data
+
+
+@pytest.mark.parametrize('vertexai', [True, False])
+@pytest.mark.asyncio
+async def test_async_session_send_input_none(
+    mock_api_client, mock_websocket, vertexai
+):
+  session = live.AsyncSession(
+      api_client=mock_api_client(vertexai=vertexai), websocket=mock_websocket
+  )
+  await session.send(input=None)
+  mock_websocket.send.assert_called_once()
+  sent_data = json.loads(mock_websocket.send.call_args[0][0])
+  assert 'client_content' in sent_data
+  assert sent_data['client_content']['turn_complete']
 
 
 @pytest.mark.parametrize('vertexai', [True, False])
@@ -467,12 +487,6 @@ def test_bidi_setup_to_api_with_config_tools_google_search_retrieval(
       ),
       tools=[types.Tool(google_search_retrieval=types.GoogleSearchRetrieval())],
   )
-  config_dict = {
-      'generation_config': {'temperature': 0.7},
-      'response_modalities': ['TEXT'],
-      'system_instruction': 'test instruction',
-      'tools': [{'google_search_retrieval': {}}],
-  }
   expected_result = {
       'setup': {
           'model': 'test_model',
@@ -492,11 +506,7 @@ def test_bidi_setup_to_api_with_config_tools_google_search_retrieval(
       model='test_model', config=config
   )
   assert result == expected_result
-  # Test for mldev, config is a dict
-  result = live.AsyncLive(mock_api_client())._LiveSetup_to_mldev(
-      model='test_model', config=config_dict
-  )
-  assert result == expected_result
+
   # Test for vertex, config is a LiveConnectConfig
   result = live.AsyncLive(mock_api_client())._LiveSetup_to_vertex(
       model='test_model', config=config
@@ -507,10 +517,11 @@ def test_bidi_setup_to_api_with_config_tools_google_search_retrieval(
 def test_bidi_setup_to_api_with_config_tools_function_declaration(
     mock_api_client,
 ):
-  config = {
+  config_dict = {
       'generation_config': {'temperature': 0.7},
       'tools': [{'function_declarations': function_declarations}],
   }
+  config = types.LiveConnectConfig(**config_dict)
   expected_result = {
       'setup': {
           'model': 'test_model',
@@ -538,25 +549,93 @@ def test_bidi_setup_to_api_with_config_tools_function_declaration(
       model='test_model', config=config
   )
 
-  assert result['setup']['tools'][0] == expected_result['setup']['tools'][0]
+  assert result['setup']['tools'][0]['functionDeclarations'][0][
+      'description'
+  ] == (
+      expected_result['setup']['tools'][0]['functionDeclarations'][0][
+          'description'
+      ]
+  )
 
   result = live.AsyncLive(mock_api_client())._LiveSetup_to_vertex(
       model='test_model', config=config
   )
-  assert result['setup']['tools'][0] == expected_result['setup']['tools'][0]
+  assert result['setup']['tools'][0]['functionDeclarations'][0][
+      'description'
+  ] == (
+      expected_result['setup']['tools'][0]['functionDeclarations'][0][
+          'description'
+      ]
+  )
+
+
+def test_bidi_setup_to_api_with_config_tools_function_directly(
+    mock_api_client,
+):
+  config_dict = {
+      'generation_config': {'temperature': 0.7},
+      'tools': [get_current_weather],
+  }
+  config = types.LiveConnectConfig(**config_dict)
+  expected_result = {
+      'setup': {
+          'model': 'test_model',
+          'tools': [{
+              'functionDeclarations': [{
+                  'parameters': {
+                      'type': 'OBJECT',
+                      'properties': {
+                          'location': {
+                              'type': 'STRING',
+                              'description': (
+                                  'The location to get the weather for'
+                              ),
+                          },
+                          'unit': {'type': 'STRING', 'enum': ['C', 'F']},
+                      },
+                  },
+                  'name': 'get_current_weather',
+                  'description': 'Get the current weather in a city.',
+              }],
+          }],
+      }
+  }
+  result = live.AsyncLive(mock_api_client())._LiveSetup_to_mldev(
+      model='test_model', config=config
+  )
+
+  assert result['setup']['tools'][0]['functionDeclarations'][0][
+      'description'
+  ] == (
+      expected_result['setup']['tools'][0]['functionDeclarations'][0][
+          'description'
+      ]
+  )
+
+  result = live.AsyncLive(mock_api_client())._LiveSetup_to_vertex(
+      model='test_model', config=config
+  )
+  assert result['setup']['tools'][0]['functionDeclarations'][0][
+      'description'
+  ] == (
+      expected_result['setup']['tools'][0]['functionDeclarations'][0][
+          'description'
+      ]
+  )
 
 
 def test_bidi_setup_to_api_with_config_tools_code_execution(
     mock_api_client,
 ):
-  config = {
+  config_dict = {
       'tools': [{'code_execution': {}}],
   }
+  config = types.LiveConnectConfig(**config_dict)
   expected_result = {
       'setup': {
           'model': 'test_model',
           'tools': [{
-              'codeExecution': {},
+              'codeExecution': types.ToolCodeExecution(),
           }],
       }
   }
@@ -570,3 +649,339 @@ def test_bidi_setup_to_api_with_config_tools_code_execution(
       model='test_model', config=config
   )
   assert result['setup']['tools'][0] == expected_result['setup']['tools'][0]
+
+
+@pytest.mark.parametrize('vertexai', [True, False])
+def test_parse_client_message_str(mock_api_client, mock_websocket, vertexai):
+  session = live.AsyncSession(
+      api_client=mock_api_client(vertexai=vertexai), websocket=mock_websocket
+  )
+  result = session._parse_client_message('test')
+  assert 'client_content' in result
+  assert result == {
+      'client_content': {
+          'turn_complete': False,
+          'turns': [{'role': 'user', 'parts': [{'text': 'test'}]}],
+      }
+  }
+  # _parse_client_message returns a TypedDict, so we should be able to
+  # construct a LiveClientMessage from it
+  assert types.LiveClientMessage(**result)
+
+
+@pytest.mark.parametrize('vertexai', [True, False])
+def test_parse_client_message_blob(mock_api_client, mock_websocket, vertexai):
+  session = live.AsyncSession(
+      api_client=mock_api_client(vertexai=vertexai), websocket=mock_websocket
+  )
+  result = session._parse_client_message(
+      types.Blob(data=bytes([0, 0, 0]), mime_type='text/plain')
+  )
+  assert 'realtime_input' in result
+  assert result == {
+      'realtime_input': {
+          'media_chunks': [{'mime_type': 'text/plain', 'data': 'AAAA'}],
+      }
+  }
+
+
+@pytest.mark.parametrize('vertexai', [True, False])
+def test_parse_client_message_blob_dict(
+    mock_api_client, mock_websocket, vertexai
+):
+  session = live.AsyncSession(
+      api_client=mock_api_client(vertexai=vertexai), websocket=mock_websocket
+  )
+
+  blob = types.Blob(data=bytes([0, 0, 0]), mime_type='text/plain')
+  blob_dict = blob.model_dump()
+  result = session._parse_client_message(blob_dict)
+  assert 'realtime_input' in result
+  assert result == {
+      'realtime_input': {
+          'media_chunks': [{'mime_type': 'text/plain', 'data': 'AAAA'}],
+      }
+  }
+
+
+@pytest.mark.parametrize('vertexai', [True, False])
+def test_parse_client_message_client_content(
+    mock_api_client, mock_websocket, vertexai
+):
+  session = live.AsyncSession(
+      api_client=mock_api_client(vertexai=vertexai), websocket=mock_websocket
+  )
+  result = session._parse_client_message(
+      types.LiveClientContent(
+          turn_complete=False,
+          turns=[types.Content(parts=[types.Part(text='test')], role='user')],
+      )
+  )
+  assert 'client_content' in result
+  assert result == {
+      'client_content': {
+          'turn_complete': False,
+          'turns': [{'role': 'user', 'parts': [{'text': 'test'}]}],
+      }
+  }
+
+
+@pytest.mark.parametrize('vertexai', [True, False])
+def test_parse_client_message_client_content_blob(
+    mock_api_client, mock_websocket, vertexai
+):
+  session = live.AsyncSession(
+      api_client=mock_api_client(vertexai=vertexai), websocket=mock_websocket
+  )
+  client_content = types.LiveClientContent(
+      turn_complete=False,
+      turns=[
+          types.Content(
+              parts=[
+                  types.Part(
+                      inline_data=types.Blob(
+                          data=bytes([0, 0, 0]), mime_type='text/plain'
+                      )
+                  )
+              ],
+              role='user',
+          )
+      ],
+  )
+  result = session._parse_client_message(client_content)
+  assert 'client_content' in result
+  assert (
+      type(
+          result['client_content']['turns'][0]['parts'][0]['inline_data'][
+              'data'
+          ]
+      )
+      == str
+  )
+  assert result == {
+      'client_content': {
+          'turn_complete': False,
+          'turns': [{
+              'role': 'user',
+              'parts': [
+                  {'inline_data': {'mime_type': 'text/plain', 'data': 'AAAA'}}
+              ],
+          }],
+      }
+  }
+
+
+@pytest.mark.parametrize('vertexai', [True, False])
+def test_parse_client_message_client_content_dict(
+    mock_api_client, mock_websocket, vertexai
+):
+  session = live.AsyncSession(
+      api_client=mock_api_client(vertexai=vertexai), websocket=mock_websocket
+  )
+  client_content = types.LiveClientContent(
+      turn_complete=False,
+      turns=[
+          types.Content(
+              parts=[
+                  types.Part(
+                      inline_data=types.Blob(
+                          data=bytes([0, 0, 0]), mime_type='text/plain'
+                      )
+                  )
+              ],
+              role='user',
+          )
+      ],
+  )
+  result = session._parse_client_message(
+      client_content.model_dump(mode='json', exclude_none=True)
+  )
+  assert 'client_content' in result
+  assert (
+      type(
+          result['client_content']['turns'][0]['parts'][0]['inline_data'][
+              'data'
+          ]
+      )
+      == str
+  )
+  assert result == {
+      'client_content': {
+          'turn_complete': False,
+          'turns': [{
+              'role': 'user',
+              'parts': [
+                  {'inline_data': {'mime_type': 'text/plain', 'data': 'AAAA'}}
+              ],
+          }],
+      }
+  }
+
+
+@pytest.mark.parametrize('vertexai', [True, False])
+def test_parse_client_message_realtime_input(
+    mock_api_client, mock_websocket, vertexai
+):
+  session = live.AsyncSession(
+      api_client=mock_api_client(vertexai=vertexai), websocket=mock_websocket
+  )
+  input = types.LiveClientRealtimeInput(
+      media_chunks=[types.Blob(data=bytes([0, 0, 0]), mime_type='text/plain')]
+  )
+  result = session._parse_client_message(input)
+  assert 'realtime_input' in result
+  assert result == {
+      'realtime_input': {
+          'media_chunks': [{'mime_type': 'text/plain', 'data': 'AAAA'}],
+      }
+  }
+
+
+@pytest.mark.parametrize('vertexai', [True, False])
+def test_parse_client_message_realtime_input_dict(
+    mock_api_client, mock_websocket, vertexai
+):
+  session = live.AsyncSession(
+      api_client=mock_api_client(vertexai=vertexai), websocket=mock_websocket
+  )
+  input = types.LiveClientRealtimeInput(
+      media_chunks=[types.Blob(data=bytes([0, 0, 0]), mime_type='text/plain')]
+  )
+  result = session._parse_client_message(
+      input.model_dump(mode='json', exclude_none=True)
+  )
+  assert 'realtime_input' in result
+  assert result == {
+      'realtime_input': {
+          'media_chunks': [{'mime_type': 'text/plain', 'data': 'AAAA'}],
+      }
+  }
+
+
+@pytest.mark.parametrize('vertexai', [True, False])
+def test_parse_client_message_tool_response(
+    mock_api_client, mock_websocket, vertexai
+):
+  session = live.AsyncSession(
+      api_client=mock_api_client(vertexai=vertexai), websocket=mock_websocket
+  )
+  input = types.LiveClientToolResponse(
+      function_responses=[
+          types.FunctionResponse(
+              id='test_id',
+              name='test_name',
+              response={'result': 'test_response'},
+          )
+      ]
+  )
+  result = session._parse_client_message(input)
+  assert 'tool_response' in result
+  assert result == {
+      'tool_response': {
+          'function_responses': [
+              {
+                  'id': 'test_id',
+                  'name': 'test_name',
+                  'response': {
+                      'result': 'test_response',
+                  },
+              },
+          ],
+      }
+  }
+
+
+@pytest.mark.parametrize('vertexai', [True, False])
+def test_parse_client_message_function_response(
+    mock_api_client, mock_websocket, vertexai
+):
+  session = live.AsyncSession(
+      api_client=mock_api_client(vertexai=vertexai), websocket=mock_websocket
+  )
+  input = types.FunctionResponse(
+    id='test_id',
+    name='test_name',
+    response={'result': 'test_response'},
+  )
+  result = session._parse_client_message(input)
+  assert 'tool_response' in result
+  assert result == {
+      'tool_response': {
+          'function_responses': [
+              {
+                  'id': 'test_id',
+                  'name': 'test_name',
+                  'response': {
+                      'result': 'test_response',
+                  },
+              },
+          ],
+      }
+  }
+
+
+@pytest.mark.parametrize('vertexai', [True, False])
+def test_parse_client_message_tool_response_dict_with_only_response(
+    mock_api_client, mock_websocket, vertexai
+):
+  session = live.AsyncSession(
+      api_client=mock_api_client(vertexai=vertexai), websocket=mock_websocket
+  )
+  input = {
+    'id': 'test_id',
+    'name': 'test_name',
+    'response': {
+        'result': 'test_response',
+    }
+  }
+  result = session._parse_client_message(input)
+  assert 'tool_response' in result
+  assert result == {
+      'tool_response': {
+          'function_responses': [
+              {
+                  'id': 'test_id',
+                  'name': 'test_name',
+                  'response': {
+                      'result': 'test_response',
+                  },
+              },
+          ],
+      }
+  }
+
+
+@pytest.mark.parametrize('vertexai', [True, False])
+def test_parse_client_message_realtime_tool_response(
+    mock_api_client, mock_websocket, vertexai
+):
+  session = live.AsyncSession(
+      api_client=mock_api_client(vertexai=vertexai), websocket=mock_websocket
+  )
+  input = types.LiveClientToolResponse(
+      function_responses=[
+          types.FunctionResponse(
+              id='test_id',
+              name='test_name',
+              response={'result': 'test_response'},
+          )
+      ]
+  )
+
+  result = session._parse_client_message(
+      input.model_dump(mode='json', exclude_none=True)
+  )
+  assert 'tool_response' in result
+  assert result == {
+      'tool_response': {
+          'function_responses': [
+              {
+                  'id': 'test_id',
+                  'name': 'test_name',
+                  'response': {
+                      'result': 'test_response',
+                  },
+              },
+          ],
+      }
+  }

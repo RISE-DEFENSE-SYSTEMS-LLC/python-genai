@@ -18,6 +18,7 @@
 
 import google.auth
 from google.auth import credentials
+import logging
 import pytest
 
 from ... import _api_client as api_client
@@ -33,7 +34,7 @@ def test_ml_dev_from_env(monkeypatch):
 
   assert not client.models._api_client.vertexai
   assert client.models._api_client.api_key == api_key
-  assert isinstance(client.models._api_client, api_client.ApiClient)
+  assert isinstance(client.models._api_client, api_client.BaseApiClient)
 
 
 def test_ml_dev_from_constructor():
@@ -120,46 +121,6 @@ def test_constructor_with_http_options():
   )
 
 
-def test_constructor_with_deprecated_response_payload_in_http_options():
-  mldev_http_options = {
-      "api_version": "v1",
-      "base_url": "https://placeholder-fake-url.com/",
-      "headers": {"X-Custom-Header": "custom_value"},
-      "deprecated_response_payload": {},
-  }
-  vertexai_http_options = {
-      "api_version": "v1",
-      "base_url": "https://{self.location}-aiplatform.googleapis.com/",
-      "headers": {"X-Custom-Header": "custom_value"},
-      "deprecated_response_payload": {},
-  }
-
-  # Expect value error when deprecated_response_payload in http_options is set
-  # for mldev client.
-  try:
-    _ = Client(api_key="google_api_key", http_options=mldev_http_options)
-  except ValueError as e:
-    assert (
-        "Setting deprecated_response_payload in http_options is not supported."
-        in str(e)
-    )
-
-  # Expect value error when deprecated_response_payload in http_options is set for
-  # vertexai client.
-  try:
-    _ = Client(
-        vertexai=True,
-        project="fake_project_id",
-        location="fake-location",
-        http_options=vertexai_http_options,
-    )
-  except ValueError as e:
-    assert (
-        "Setting deprecated_response_payload in http_options is not supported."
-        in str(e)
-    )
-
-
 def test_constructor_with_invalid_http_options_key():
   mldev_http_options = {
       "invalid_version_key": "v1",
@@ -180,7 +141,7 @@ def test_constructor_with_invalid_http_options_key():
     _ = Client(api_key="google_api_key", http_options=mldev_http_options)
   except Exception as e:
     assert isinstance(e, ValueError)
-    assert "Invalid http_options" in str(e)
+    assert "invalid_version_key" in str(e)
 
   # Expect value error when HTTPOptions is provided as a dict and contains
   # an invalid key.
@@ -193,7 +154,7 @@ def test_constructor_with_invalid_http_options_key():
     )
   except Exception as e:
     assert isinstance(e, ValueError)
-    assert "Invalid http_options" in str(e)
+    assert "invalid_header_key" in str(e)
 
 
 def test_constructor_with_http_options_as_pydantic_type():
@@ -302,7 +263,7 @@ def test_vertexai_from_constructor():
   assert client.models._api_client.vertexai
   assert client.models._api_client.project == project_id
   assert client.models._api_client.location == location
-  assert isinstance(client.models._api_client, api_client.ApiClient)
+  assert isinstance(client.models._api_client, api_client.BaseApiClient)
 
 
 def test_invalid_vertexai_constructor_empty(monkeypatch):
@@ -310,7 +271,7 @@ def test_invalid_vertexai_constructor_empty(monkeypatch):
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "")
     monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "")
     monkeypatch.setenv("GOOGLE_API_KEY", "")
-    def mock_auth_default():
+    def mock_auth_default(scopes=None):
       return None, None
 
     monkeypatch.setattr(google.auth, "default", mock_auth_default)
@@ -379,7 +340,7 @@ def test_vertexai_explicit_arg_precedence1(monkeypatch):
   assert client.models._api_client.project == project_id
   assert client.models._api_client.location == location
   assert not client.models._api_client.api_key
-  assert isinstance(client.models._api_client, api_client.ApiClient)
+  assert isinstance(client.models._api_client, api_client.BaseApiClient)
 
 
 def test_vertexai_explicit_arg_precedence2(monkeypatch):
@@ -398,7 +359,7 @@ def test_vertexai_explicit_arg_precedence2(monkeypatch):
   assert not client.models._api_client.project
   assert not client.models._api_client.location
   assert client.models._api_client.api_key == api_key
-  assert isinstance(client.models._api_client, api_client.ApiClient)
+  assert isinstance(client.models._api_client, api_client.BaseApiClient)
 
 
 def test_invalid_mldev_constructor():
@@ -424,7 +385,7 @@ def test_mldev_explicit_arg_precedence(monkeypatch):
 
   assert not client.models._api_client.vertexai
   assert client.models._api_client.api_key == api_key
-  assert isinstance(client.models._api_client, api_client.ApiClient)
+  assert isinstance(client.models._api_client, api_client.BaseApiClient)
 
 
 def test_replay_client_ml_dev_from_env(monkeypatch, use_vertex: bool):
@@ -478,7 +439,7 @@ def test_change_client_mode_from_env(monkeypatch, use_vertex: bool):
   monkeypatch.setenv("GOOGLE_GENAI_CLIENT_MODE", None)
 
   client2 = Client()
-  assert isinstance(client2.models._api_client, api_client.ApiClient)
+  assert isinstance(client2.models._api_client, api_client.BaseApiClient)
 
 
 def test_vertexai_apikey_from_constructor(monkeypatch):
@@ -496,8 +457,8 @@ def test_vertexai_apikey_from_constructor(monkeypatch):
   assert not client.models._api_client.project
   assert not client.models._api_client.location
   assert client.models._api_client.api_key == api_key
-  assert "aiplatform" in client._api_client._http_options["base_url"]
-  assert isinstance(client.models._api_client, api_client.ApiClient)
+  assert "aiplatform" in client._api_client._http_options.base_url
+  assert isinstance(client.models._api_client, api_client.BaseApiClient)
 
 
 def test_vertexai_apikey_from_env(monkeypatch):
@@ -516,8 +477,8 @@ def test_vertexai_apikey_from_env(monkeypatch):
   assert client.models._api_client.api_key == api_key
   assert not client.models._api_client.project
   assert not client.models._api_client.location
-  assert "aiplatform" in client._api_client._http_options["base_url"]
-  assert isinstance(client.models._api_client, api_client.ApiClient)
+  assert "aiplatform" in client._api_client._http_options.base_url
+  assert isinstance(client.models._api_client, api_client.BaseApiClient)
 
 
 def test_vertexai_apikey_invalid_constructor1():
@@ -551,8 +512,8 @@ def test_vertexai_apikey_combo1(monkeypatch):
   assert client.models._api_client.api_key == api_key
   assert not client.models._api_client.project
   assert not client.models._api_client.location
-  assert "aiplatform" in client._api_client._http_options["base_url"]
-  assert isinstance(client.models._api_client, api_client.ApiClient)
+  assert "aiplatform" in client._api_client._http_options.base_url
+  assert isinstance(client.models._api_client, api_client.BaseApiClient)
 
 
 def test_vertexai_apikey_combo2(monkeypatch):
@@ -571,8 +532,8 @@ def test_vertexai_apikey_combo2(monkeypatch):
   assert not client.models._api_client.api_key
   assert client.models._api_client.project == project_id
   assert client.models._api_client.location == location
-  assert "aiplatform" in client._api_client._http_options["base_url"]
-  assert isinstance(client.models._api_client, api_client.ApiClient)
+  assert "aiplatform" in client._api_client._http_options.base_url
+  assert isinstance(client.models._api_client, api_client.BaseApiClient)
 
 
 def test_vertexai_apikey_combo3(monkeypatch):
@@ -591,8 +552,8 @@ def test_vertexai_apikey_combo3(monkeypatch):
   assert not client.models._api_client.api_key
   assert client.models._api_client.project == project_id
   assert client.models._api_client.location == location
-  assert "aiplatform" in client._api_client._http_options["base_url"]
-  assert isinstance(client.models._api_client, api_client.ApiClient)
+  assert "aiplatform" in client._api_client._http_options.base_url
+  assert isinstance(client.models._api_client, api_client.BaseApiClient)
 
 
 def test_vertexai_global_endpoint(monkeypatch):
@@ -607,7 +568,22 @@ def test_vertexai_global_endpoint(monkeypatch):
   assert client.models._api_client.vertexai
   assert client.models._api_client.project == project_id
   assert client.models._api_client.location == location
-  assert client.models._api_client._http_options["base_url"] == (
+  assert client.models._api_client._http_options.base_url == (
       "https://aiplatform.googleapis.com/"
   )
-  assert isinstance(client.models._api_client, api_client.ApiClient)
+  assert isinstance(client.models._api_client, api_client.BaseApiClient)
+
+
+def test_client_logs_to_logger_instance(monkeypatch, caplog):
+  caplog.set_level(logging.DEBUG, logger='google_genai._api_client')
+
+  project_id = "fake_project_id"
+  location = "fake-location"
+  api_key = "vertexai_api_key"
+  monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", project_id)
+  monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", location)
+
+  _ = Client(vertexai=True, api_key=api_key)
+
+  assert 'INFO' in caplog.text
+  assert 'The user provided Vertex AI API key will take precedence' in caplog.text

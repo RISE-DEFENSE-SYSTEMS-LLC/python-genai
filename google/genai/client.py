@@ -19,7 +19,7 @@ from typing import Optional, Union
 import google.auth
 import pydantic
 
-from ._api_client import ApiClient, HttpOptions, HttpOptionsDict
+from ._api_client import BaseApiClient, HttpOptions, HttpOptionsDict
 from ._replay_api_client import ReplayApiClient
 from .batches import AsyncBatches, Batches
 from .caches import AsyncCaches, Caches
@@ -27,13 +27,14 @@ from .chats import AsyncChats, Chats
 from .files import AsyncFiles, Files
 from .live import AsyncLive
 from .models import AsyncModels, Models
+from .operations import AsyncOperations, Operations
 from .tunings import AsyncTunings, Tunings
 
 
 class AsyncClient:
   """Client for making asynchronous (non-blocking) requests."""
 
-  def __init__(self, api_client: ApiClient):
+  def __init__(self, api_client: BaseApiClient):
 
     self._api_client = api_client
     self._models = AsyncModels(self._api_client)
@@ -42,6 +43,7 @@ class AsyncClient:
     self._batches = AsyncBatches(self._api_client)
     self._files = AsyncFiles(self._api_client)
     self._live = AsyncLive(self._api_client)
+    self._operations = AsyncOperations(self._api_client)
 
   @property
   def models(self) -> AsyncModels:
@@ -71,6 +73,9 @@ class AsyncClient:
   def live(self) -> AsyncLive:
     return self._live
 
+  @property
+  def operations(self) -> AsyncOperations:
+    return self._operations
 
 class DebugConfig(pydantic.BaseModel):
   """Configuration options that change client network behavior when testing."""
@@ -94,6 +99,17 @@ class Client:
   Use this client to make a request to the Gemini Developer API or Vertex AI
   API and then wait for the response.
 
+  To initialize the client, provide the required arguments either directly
+  or by using environment variables. Gemini API users and Vertex AI users in
+  express mode can provide API key by providing input argument
+  `api_key="your-api-key"` or by defining `GOOGLE_API_KEY="your-api-key"` as an
+  environment variable
+
+  Vertex AI API users can provide inputs argument as `vertexai=True,
+  project="your-project-id", location="us-central1"` or by defining
+  `GOOGLE_GENAI_USE_VERTEXAI=true`, `GOOGLE_CLOUD_PROJECT` and
+  `GOOGLE_CLOUD_LOCATION` environment variables.
+
   Attributes:
     api_key: The `API key <https://ai.google.dev/gemini-api/docs/api-key>`_ to
       use for authentication. Applies to the Gemini Developer API only.
@@ -114,8 +130,9 @@ class Client:
       from environment variables. Applies to the Vertex AI API only.
     debug_config: Config settings that control network behavior of the client.
       This is typically used when running test code.
-    http_options: Http options to use for the client. Response_payload can't be
-      set when passing to the client constructor.
+    http_options: Http options to use for the client. These options will be
+      applied to all requests made by the client. Example usage:
+      `client = genai.Client(http_options=types.HttpOptions(api_version='v1'))`.
 
   Usage for the Gemini Developer API:
 
@@ -173,20 +190,12 @@ class Client:
        debug_config (DebugConfig): Config settings that control network behavior
          of the client. This is typically used when running test code.
        http_options (Union[HttpOptions, HttpOptionsDict]): Http options to use
-         for the client. The field deprecated_response_payload should not be set
-         in http_options.
+         for the client.
     """
 
     self._debug_config = debug_config or DebugConfig()
-
-    # Throw ValueError if deprecated_response_payload is set in http_options
-    # due to unpredictable behavior when running multiple coroutines through
-    # client.aio.
-    if http_options and 'deprecated_response_payload' in http_options:
-      raise ValueError(
-          'Setting deprecated_response_payload in http_options is not'
-          ' supported.'
-      )
+    if isinstance(http_options, dict):
+      http_options = HttpOptions(**http_options)
 
     self._api_client = self._get_api_client(
         vertexai=vertexai,
@@ -204,6 +213,7 @@ class Client:
     self._caches = Caches(self._api_client)
     self._batches = Batches(self._api_client)
     self._files = Files(self._api_client)
+    self._operations = Operations(self._api_client)
 
   @staticmethod
   def _get_api_client(
@@ -221,10 +231,10 @@ class Client:
         'auto',
     ]:
       return ReplayApiClient(
-          mode=debug_config.client_mode,
-          replay_id=debug_config.replay_id,
+          mode=debug_config.client_mode,  # type: ignore[arg-type]
+          replay_id=debug_config.replay_id,  # type: ignore[arg-type]
           replays_directory=debug_config.replays_directory,
-          vertexai=vertexai,
+          vertexai=vertexai,  # type: ignore[arg-type]
           api_key=api_key,
           credentials=credentials,
           project=project,
@@ -232,7 +242,7 @@ class Client:
           http_options=http_options,
       )
 
-    return ApiClient(
+    return BaseApiClient(
         vertexai=vertexai,
         api_key=api_key,
         credentials=credentials,
@@ -268,6 +278,10 @@ class Client:
   @property
   def files(self) -> Files:
     return self._files
+
+  @property
+  def operations(self) -> Operations:
+    return self._operations
 
   @property
   def vertexai(self) -> bool:

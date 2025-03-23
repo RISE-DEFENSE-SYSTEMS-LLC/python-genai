@@ -1,5 +1,137 @@
 # Changelog
 
+## [1.7.0](https://github.com/googleapis/python-genai/compare/v1.6.0...v1.7.0) (2025-03-18)
+
+
+### Features
+
+* Bump up the websockets version for proxy support ([b996c4b](https://github.com/googleapis/python-genai/commit/b996c4b62be8c4d108dbe572372a2c31661e9bcc))
+* Leverage httpx connection pooling and avoid instantiation of httpx.Client or httpx.AsyncClient for each call ([2ac5129](https://github.com/googleapis/python-genai/commit/2ac5129d4005d797f29df0a213e2455d7d730b43))
+
+
+### Bug Fixes
+
+* **chats:** Fix duplicate history when appending AFC history ([e4b1d8a](https://github.com/googleapis/python-genai/commit/e4b1d8af03be5579ff6cb0ba42dd0d3d65126892))
+* Fix incorrect casing of upload status and url headers in Files API. httpx.Response returns 'x-goog-upload-status', but we were checking for 'X-Goog-Upload-Status'. Also clean up upload_file and download_file requests. ([2ac5129](https://github.com/googleapis/python-genai/commit/2ac5129d4005d797f29df0a213e2455d7d730b43))
+
+
+### Documentation
+
+* Use consistent terminology for Gemini Developer API and Vertex AI ([7f1cc22](https://github.com/googleapis/python-genai/commit/7f1cc22e6220d4550726bd75c0dff922698d674e))
+
+## [1.5.0](https://github.com/googleapis/python-genai/compare/v1.4.0...v1.5.0) (2025-03-07)
+
+
+### Features
+
+* Determine mime_type from local images ([5e84ddc](https://github.com/googleapis/python-genai/commit/5e84ddc8d4265069e6a03c9a99ff6891cc641297))
+* Enable generate_videos for Gemini Developer API ([4a242f6](https://github.com/googleapis/python-genai/commit/4a242f6f759a5e3fd1435b548d8dda38091b9cee))
+* Enable image to video for generate_videos ([787354b](https://github.com/googleapis/python-genai/commit/787354bf96d7a4fc479d9e8bd432e76ab54ab54c))
+* Expand files.download to work on Video and GeneratedVideo objects ([8d4d6fd](https://github.com/googleapis/python-genai/commit/8d4d6fd6271b3f74d3efae676fc08418b9bb5cda))
+* Support asynchronously upload and download files using httpx ([498c01d](https://github.com/googleapis/python-genai/commit/498c01da1d2820b97b2218022b7e42840453e739))
+
+
+### Bug Fixes
+
+* Fix incorrect unit for `timeout_in_seconds` in HttpOptions. ([a9be9a2](https://github.com/googleapis/python-genai/commit/a9be9a20691249bacf162d97ef6664883102edc7))
+* Fix Video.show() when uri and video_bytes are provided ([3477c40](https://github.com/googleapis/python-genai/commit/3477c40cf89eb8006b6a0877710ec77cdb1edeff))
+
+## [1.4.0](https://github.com/googleapis/python-genai/compare/v1.3.0...v1.4.0) (2025-03-05)
+
+
+### Features
+
+* Add response_id and create_time to GenerateContentResponse ([b46ed36](https://github.com/googleapis/python-genai/commit/b46ed361d9c0845880a1447ee42dd3c0f6f7a886))
+* Allow non-content types in generate_content ([cbaaf4a](https://github.com/googleapis/python-genai/commit/cbaaf4ae19e17f4fafb48e8671c10786095e2936))
+* Enable Live API initial connect to accept functions directly, in addition to just FunctionDeclaration ([91b1d3e](https://github.com/googleapis/python-genai/commit/91b1d3ee85fd32e9243e3a2da4d10a763e4d0005))
+* Enable minItem, maxItem, nullable for Schema type when calling Gemini API. ([867ce70](https://github.com/googleapis/python-genai/commit/867ce70cf4a7ebd52554af3d494f73fd3cd4f6b6))
+* Implement get history to return comprehensive or curated chat history ([92deda1](https://github.com/googleapis/python-genai/commit/92deda1b86c27c4f93691d4f4056ed64ba84d6a8))
+* Support aspect ratio for edit_image ([5423a58](https://github.com/googleapis/python-genai/commit/5423a58f3abea2b468973c0c071ced6547f6cef1))
+
+
+### Bug Fixes
+
+* Allow user do batch generate content when passing a list of strings ([cbaaf4a](https://github.com/googleapis/python-genai/commit/cbaaf4ae19e17f4fafb48e8671c10786095e2936))
+* Fix chats.send_message_stream curated history ([bcf2be0](https://github.com/googleapis/python-genai/commit/bcf2be03ae6d51957052cacfb8ed905045cc6f77))
+* Log warn instead of raise error for GenerateContentResponse.text quick accessor when there are mixed part types ([55a0638](https://github.com/googleapis/python-genai/commit/55a0638075d89b873aea581e2012a0951cbcf7fb))
+* Remove the keyword parameter requirement for UserContent and ModelContent ([0cc292f](https://github.com/googleapis/python-genai/commit/0cc292f5b61dcc2756c2110038c93c0c23b29c1d))
+
+## [1.3.0](https://github.com/googleapis/python-genai/compare/v1.2.0...v1.3.0) (2025-02-24)
+
+
+### Features
+
+* Add generate_videos (Veo 2) support for Python ([e9e2be7](https://github.com/googleapis/python-genai/commit/e9e2be73d5a2f6a03d6a2a665cf35e96f2ed97cd))
+* Add sdk logger instance (fixes [#278](https://github.com/googleapis/python-genai/issues/278)) ([cf281b5](https://github.com/googleapis/python-genai/commit/cf281b58195be1dd374e4754e432603ac215202f))
+* Introduce response.executable_code and response.code_execution_result quick accessors for GenerateContentResponse class ([3725ddf](https://github.com/googleapis/python-genai/commit/3725ddf44a0df04f6fac0bd5295f45ed20b4a8fe))
+* Introduce UserContent and ModelContent to facilitate easier content creation ([c8cfef8](https://github.com/googleapis/python-genai/commit/c8cfef85ca1f7901e802800f580915a14340cae7))
+* Native async client support using httpx ([c38da8d](https://github.com/googleapis/python-genai/commit/c38da8d4425a92bd6ba483abccc3dbeafbf8daa4))
+* Provide a public property for determining the module backend. ([8e561de](https://github.com/googleapis/python-genai/commit/8e561de04965bb8766db87ad8eea7c57c1040442))
+
+
+### Bug Fixes
+
+* Enable sending empty input to Live API as turn complete ([99a5510](https://github.com/googleapis/python-genai/commit/99a55100e1c4e91f53b22881fbff67e62f6fb99d))
+* Fix automatic function calling warning message logic. ([b99da95](https://github.com/googleapis/python-genai/commit/b99da95ae0b986d77853c917931bdfa94c6b7714))
+* Fix duplicate get_function_response_parts in (async) generate_content_stream and ensure chunk isn't empty before get_function_response_parts ([d4193e6](https://github.com/googleapis/python-genai/commit/d4193e6eb22d62c61b2727600171eb06780bfa18))
+* Properly handle empty json response with headers for list models ([859ebc3](https://github.com/googleapis/python-genai/commit/859ebc3dc51aab9834b9034b5a1a205bcc72d25d))
+
+
+### Documentation
+
+* Add docs for error handling ([#317](https://github.com/googleapis/python-genai/issues/317)) ([6e1cb82](https://github.com/googleapis/python-genai/commit/6e1cb82704f6cb05b67191a319190c5ce0f67d9c))
+* Add instruction on how to disable automatic function calling. ([f8b12d5](https://github.com/googleapis/python-genai/commit/f8b12d53567585094f7e7b1d015b89c993f480de))
+* Regenerate docs for 1.2.0 ([30a3493](https://github.com/googleapis/python-genai/commit/30a34931d200feb12da54e978ea1f4a4a3d1e82e))
+* Remove negative_prompt from image samples (fixes [#339](https://github.com/googleapis/python-genai/issues/339)) ([81e18f0](https://github.com/googleapis/python-genai/commit/81e18f053048ff4b3d2c5dde0726234d51cc8290))
+* Update docs for models modules ([d96bba2](https://github.com/googleapis/python-genai/commit/d96bba29326113dba46ff16932deeb50618b8d8c))
+
+## [1.2.0](https://github.com/googleapis/python-genai/compare/v1.1.0...v1.2.0) (2025-02-12)
+
+
+### Features
+
+* Enable Media resolution for Gemini API. ([6cdf61d](https://github.com/googleapis/python-genai/commit/6cdf61d09f0dec0b27f2be6a0487ec5f4792d62f))
+* Support property_ordering in response_schema (fixes [#236](https://github.com/googleapis/python-genai/issues/236)) ([01b15e3](https://github.com/googleapis/python-genai/commit/01b15e32d3823a58d25534bb6eea93f30bf82219))
+
+
+### Bug Fixes
+
+* Default to list base models for async models list ([d3226b7](https://github.com/googleapis/python-genai/commit/d3226b7ce9fde115e503da7f9108d735fc89325c))
+* Remove Type import from types.py that get's shadowed by API Type type. (fixes [#310](https://github.com/googleapis/python-genai/issues/310)) ([78f58c3](https://github.com/googleapis/python-genai/commit/78f58c3f63ec1d9fb916e81f9b962d5b65b13ec2))
+* Use typing_extensions.TypedDict for TypedDict types (fixes [#189](https://github.com/googleapis/python-genai/issues/189)) ([996562a](https://github.com/googleapis/python-genai/commit/996562afed6d19b20bef343262e4c8820559c2d6))
+
+
+### Documentation
+
+* Client initialization using environmental variables. ([e4c2ffc](https://github.com/googleapis/python-genai/commit/e4c2ffcdb5ddd68ded5f3e2b98c0b44afe91ca1b))
+* Fix File.expiration_time description (fixes [#318](https://github.com/googleapis/python-genai/issues/318)) ([729f619](https://github.com/googleapis/python-genai/commit/729f619bdc88f0d775fda3b9f1a75a527ddf90ac))
+* Fix files.upload docs to use 'file' instead of 'path' (fixes [#306](https://github.com/googleapis/python-genai/issues/306)) ([2b35d0c](https://github.com/googleapis/python-genai/commit/2b35d0ca4e74b67f98e64da88286148370be9b6f))
+
+## [1.1.0](https://github.com/googleapis/python-genai/compare/v1.0.0...v1.1.0) (2025-02-10)
+
+
+### Features
+
+* Add support for typing.Literal in response_schema (fixes [#264](https://github.com/googleapis/python-genai/issues/264)) ([384c4eb](https://github.com/googleapis/python-genai/commit/384c4eb7bac7ac867db8f19777c33e01daff89ef))
+* Allow converting a function into FunctionDeclaration with api option ([408e28f](https://github.com/googleapis/python-genai/commit/408e28fc9892996eb1cb617de3cf7ce658deed16))
+* Support generate content config for each chat turn ([ca19100](https://github.com/googleapis/python-genai/commit/ca1910026d7e425c1f9adb13779ec43bc2b9d99e))
+* Tuning - `Tuning.tune` for Gemini API no longer blocks until the tuning operation is resolved ([fcf8888](https://github.com/googleapis/python-genai/commit/fcf88881698eabfa7d808df0f1353aa6bcc54cb8))
+
+
+### Bug Fixes
+
+* Remove duplicate function invocations and ensure automatic function calling can be disabled in generate_content_stream ([0958fbe](https://github.com/googleapis/python-genai/commit/0958fbe4ce68c09a6b665fcacb2e3a16dfd822d2))
+* Response_schema generation for pydantic fields with type Optional[list] and Optional[MyBaseModel] now work correctly (fixes [#246](https://github.com/googleapis/python-genai/issues/246)) ([8330561](https://github.com/googleapis/python-genai/commit/833056195bb7fe7c7e45095df2eea748f48de49c))
+* Support dict response_schema with 'any_of' key ([75f5056](https://github.com/googleapis/python-genai/commit/75f505637c89df50120e3ea25c6379fa49b54abf))
+* Common - Do not fail when server returns unknown enum values on Python &lt;3.11 ([843d86d](https://github.com/googleapis/python-genai/commit/843d86d38699be5f6acc58e5e5a915acab8018be))
+
+
+### Documentation
+
+* Add docs on how to structure `contents` (fixes [#274](https://github.com/googleapis/python-genai/issues/274)) ([da356cb](https://github.com/googleapis/python-genai/commit/da356cb12d9b68fe9ccae0fec1c059399e7f9685))
+* Regenerate docs for 1.0 ([fbee816](https://github.com/googleapis/python-genai/commit/fbee81625178fe9d39c7856bcae01ebf570b154c))
+* Update model names in README, fix function calling example ([11c0274](https://github.com/googleapis/python-genai/commit/11c0274fbac5c82e39dac4e99ac7237cd9705e0b))
+
 ## [1.0.0](https://github.com/googleapis/python-genai/compare/v0.8.0...v1.0.0) (2025-02-05)
 
 

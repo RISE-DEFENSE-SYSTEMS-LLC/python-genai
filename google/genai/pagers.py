@@ -18,7 +18,7 @@
 # pylint: disable=protected-access
 
 import copy
-from typing import Any, AsyncIterator, Awaitable, Callable, Generic, Iterator, Literal, TypeVar
+from typing import Any, AsyncIterator,Awaitable, Callable, Generic, Iterator, Literal, TypeVar
 
 T = TypeVar('T')
 
@@ -30,10 +30,10 @@ PagedItem = Literal[
 class _BasePager(Generic[T]):
   """Base pager class for iterating through paginated results."""
 
-  def __init__(
+  def _init_page(
       self,
       name: PagedItem,
-      request: Callable[Any, Any],
+      request: Callable[..., Any],
       response: Any,
       config: Any,
   ):
@@ -54,11 +54,20 @@ class _BasePager(Generic[T]):
 
     self._page_size = request_config.get('page_size', len(self._page))
 
+  def __init__(
+      self,
+      name: PagedItem,
+      request: Callable[..., Any],
+      response: Any,
+      config: Any,
+  ):
+    self._init_page(name, request, response, config)
+
   @property
   def page(self) -> list[T]:
-    """Returns the current page, which is a list of items.
+    """Returns a subset of the entire list of items. 
 
-    The returned list of items is a subset of the entire list.
+    For the number of items returned, see `pageSize()`.
 
     Usage:
 
@@ -72,7 +81,7 @@ class _BasePager(Generic[T]):
     return self._page
 
   @property
-  def name(self) -> str:
+  def name(self) -> PagedItem:
     """Returns the type of paged item (for example, ``batch_jobs``).
 
     Usage:
@@ -88,9 +97,7 @@ class _BasePager(Generic[T]):
 
   @property
   def page_size(self) -> int:
-    """Returns the length of the page fetched each time by this pager.
-
-    The number of items in the page is less than or equal to the page length.
+    """Returns the maximum number of items fetched by the pager at one time.
 
     Usage:
 
@@ -139,7 +146,7 @@ class _BasePager(Generic[T]):
     Args:
       response: The response object from the API request.
     """
-    self.__init__(self.name, self._request, response, self.config)
+    self._init_page(self.name, self._request, response, self.config)
 
 
 class Pager(_BasePager[T]):
@@ -191,7 +198,7 @@ class AsyncPager(_BasePager[T]):
   def __init__(
       self,
       name: PagedItem,
-      request: Callable[Any, Awaitable[Any]],
+      request: Callable[..., Awaitable[Any]],
       response: Any,
       config: Any,
   ):
@@ -202,7 +209,7 @@ class AsyncPager(_BasePager[T]):
     self._idx = 0
     return self
 
-  async def __anext__(self) -> Awaitable[T]:
+  async def __anext__(self) -> T:
     """Returns the next item asynchronously."""
     if self._idx >= len(self):
       try:

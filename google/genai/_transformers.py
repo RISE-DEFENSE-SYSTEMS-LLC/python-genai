@@ -20,11 +20,13 @@ from collections.abc import Iterable, Mapping
 from enum import Enum, EnumMeta
 import inspect
 import io
+import logging
 import re
-import time
-import typing
-from typing import Any, GenericAlias, Optional, Union
 import sys
+import time
+import types as builtin_types
+import typing
+from typing import Any, GenericAlias, Optional, Union  # type: ignore[attr-defined]
 
 if typing.TYPE_CHECKING:
   import PIL.Image
@@ -34,16 +36,19 @@ import pydantic
 from . import _api_client
 from . import types
 
+logger = logging.getLogger('google_genai._transformers')
+
 if sys.version_info >= (3, 10):
-  VersionedUnionType = typing.types.UnionType
-  _UNION_TYPES = (typing.Union, typing.types.UnionType)
+  VersionedUnionType = builtin_types.UnionType
+  _UNION_TYPES = (typing.Union, builtin_types.UnionType)
+  from typing import TypeGuard
 else:
   VersionedUnionType = typing._UnionGenericAlias
   _UNION_TYPES = (typing.Union,)
-
+  from typing_extensions import TypeGuard
 
 def _resource_name(
-    client: _api_client.ApiClient,
+    client: _api_client.BaseApiClient,
     resource_name: str,
     *,
     collection_identifier: str,
@@ -135,7 +140,7 @@ def _resource_name(
       return resource_name
 
 
-def t_model(client: _api_client.ApiClient, model: str):
+def t_model(client: _api_client.BaseApiClient, model: str):
   if not model:
     raise ValueError('model is required.')
   if client.vertexai:
@@ -159,7 +164,9 @@ def t_model(client: _api_client.ApiClient, model: str):
       return f'models/{model}'
 
 
-def t_models_url(api_client: _api_client.ApiClient, base_models: bool) -> str:
+def t_models_url(
+    api_client: _api_client.BaseApiClient, base_models: bool
+) -> str:
   if api_client.vertexai:
     if base_models:
       return 'publishers/google/models'
@@ -173,8 +180,9 @@ def t_models_url(api_client: _api_client.ApiClient, base_models: bool) -> str:
 
 
 def t_extract_models(
-    api_client: _api_client.ApiClient, response: dict
-) -> list[types.Model]:
+    api_client: _api_client.BaseApiClient,
+    response: dict[str, list[types.ModelDict]],
+) -> Optional[list[types.ModelDict]]:
   if not response:
     return []
   elif response.get('models') is not None:
@@ -183,11 +191,18 @@ def t_extract_models(
     return response.get('tunedModels')
   elif response.get('publisherModels') is not None:
     return response.get('publisherModels')
+  elif (
+      response.get('httpHeaders') is not None
+      and response.get('jsonPayload') is None
+  ):
+    return []
   else:
-    raise ValueError('Cannot determine the models type.')
+    logger.warning('Cannot determine the models type.')
+    logger.debug('Cannot determine the models type for response: %s', response)
+    return []
 
 
-def t_caches_model(api_client: _api_client.ApiClient, model: str):
+def t_caches_model(api_client: _api_client.BaseApiClient, model: str):
   model = t_model(api_client, model)
   if not model:
     return None
@@ -203,14 +218,20 @@ def t_caches_model(api_client: _api_client.ApiClient, model: str):
 
 
 def pil_to_blob(img) -> types.Blob:
+  PngImagePlugin: Optional[builtin_types.ModuleType]
   try:
     import PIL.PngImagePlugin
+
     PngImagePlugin = PIL.PngImagePlugin
   except ImportError:
     PngImagePlugin = None
 
   bytesio = io.BytesIO()
-  if PngImagePlugin is not None and isinstance(img, PngImagePlugin.PngImageFile) or img.mode == 'RGBA':
+  if (
+      PngImagePlugin is not None
+      and isinstance(img, PngImagePlugin.PngImageFile)
+      or img.mode == 'RGBA'
+  ):
     img.save(bytesio, format='PNG')
     mime_type = 'image/png'
   else:
@@ -221,10 +242,7 @@ def pil_to_blob(img) -> types.Blob:
   return types.Blob(mime_type=mime_type, data=data)
 
 
-PartType = Union[types.Part, types.PartDict, str, 'PIL.Image.Image']
-
-
-def t_part(client: _api_client.ApiClient, part: PartType) -> types.Part:
+def t_part(part: Optional[types.PartUnionDict]) -> types.Part:
   try:
     import PIL.Image
 
@@ -232,7 +250,7 @@ def t_part(client: _api_client.ApiClient, part: PartType) -> types.Part:
   except ImportError:
     PIL_Image = None
 
-  if not part:
+  if part is None:
     raise ValueError('content part is required.')
   if isinstance(part, str):
     return types.Part(text=part)
@@ -242,25 +260,29 @@ def t_part(client: _api_client.ApiClient, part: PartType) -> types.Part:
     if not part.uri or not part.mime_type:
       raise ValueError('file uri and mime_type are required.')
     return types.Part.from_uri(file_uri=part.uri, mime_type=part.mime_type)
-  else:
+  if isinstance(part, dict):
+    return types.Part.model_validate(part)
+  if isinstance(part, types.Part):
     return part
+  raise ValueError(f'Unsupported content part type: {type(part)}')
 
 
 def t_parts(
-    client: _api_client.ApiClient, parts: Union[list, PartType]
+    parts: Optional[Union[list[types.PartUnionDict], types.PartUnionDict, list[types.Part]]],
 ) -> list[types.Part]:
-  if parts is None:
+  #
+  if parts is None or (isinstance(parts, list) and not parts):
     raise ValueError('content parts are required.')
   if isinstance(parts, list):
-    return [t_part(client, part) for part in parts]
+    return [t_part(part) for part in parts]
   else:
-    return [t_part(client, parts)]
+    return [t_part(parts)]
 
 
 def t_image_predictions(
-    client: _api_client.ApiClient,
+    client: _api_client.BaseApiClient,
     predictions: Optional[Iterable[Mapping[str, Any]]],
-) -> list[types.GeneratedImage]:
+) -> Optional[list[types.GeneratedImage]]:
   if not predictions:
     return None
   images = []
@@ -277,47 +299,163 @@ def t_image_predictions(
   return images
 
 
-ContentType = Union[types.Content, types.ContentDict, PartType]
+ContentType = Union[types.Content, types.ContentDict, types.PartUnionDict]
 
 
 def t_content(
-    client: _api_client.ApiClient,
-    content: ContentType,
-):
-  if not content:
+    client: _api_client.BaseApiClient,
+    content: Optional[ContentType],
+) -> types.Content:
+  if content is None:
     raise ValueError('content is required.')
   if isinstance(content, types.Content):
     return content
   if isinstance(content, dict):
-    return types.Content.model_validate(content)
-  return types.Content(role='user', parts=t_parts(client, content))
+    try:
+      return types.Content.model_validate(content)
+    except pydantic.ValidationError:
+      possible_part = types.Part.model_validate(content)
+      return (
+          types.ModelContent(parts=[possible_part])
+          if possible_part.function_call
+          else types.UserContent(parts=[possible_part])
+      )
+  if isinstance(content, types.Part):
+    return (
+        types.ModelContent(parts=[content])
+        if content.function_call
+        else types.UserContent(parts=[content])
+    )
+  return types.UserContent(parts=content)
 
 
 def t_contents_for_embed(
-    client: _api_client.ApiClient,
+    client: _api_client.BaseApiClient,
     contents: Union[list[types.Content], list[types.ContentDict], ContentType],
-):
-  if client.vertexai and isinstance(contents, list):
-    # TODO: Assert that only text is supported.
-    return [t_content(client, content).parts[0].text for content in contents]
-  elif client.vertexai:
-    return [t_content(client, contents).parts[0].text]
-  elif isinstance(contents, list):
-    return [t_content(client, content) for content in contents]
+) -> Union[list[str], list[types.Content]]:
+  if isinstance(contents, list):
+    transformed_contents = [t_content(client, content) for content in contents]
   else:
-    return [t_content(client, contents)]
+    transformed_contents = [t_content(client, contents)]
+
+  if client.vertexai:
+    text_parts = []
+    for content in transformed_contents:
+      if content is not None:
+        if isinstance(content, dict):
+          content = types.Content.model_validate(content)
+        if content.parts is not None:
+          for part in content.parts:
+            if part.text:
+              text_parts.append(part.text)
+            else:
+              logger.warning(
+                  f'Non-text part found, only returning text parts.'
+              )
+    return text_parts
+  else:
+    return transformed_contents
 
 
 def t_contents(
-    client: _api_client.ApiClient,
-    contents: Union[list[types.Content], list[types.ContentDict], ContentType],
-):
-  if not contents:
+    client: _api_client.BaseApiClient,
+    contents: Optional[
+        Union[types.ContentListUnion, types.ContentListUnionDict, types.Content]
+    ],
+) -> list[types.Content]:
+  if contents is None or (isinstance(contents, list) and not contents):
     raise ValueError('contents are required.')
-  if isinstance(contents, list):
-    return [t_content(client, content) for content in contents]
-  else:
+  if not isinstance(contents, list):
     return [t_content(client, contents)]
+
+  try:
+    import PIL.Image
+
+    PIL_Image = PIL.Image.Image
+  except ImportError:
+    PIL_Image = None
+
+  result: list[types.Content] = []
+  accumulated_parts: list[types.Part] = []
+
+  def _is_part(part: Union[types.PartUnionDict, Any]) -> TypeGuard[types.PartUnionDict]:
+    if (
+        isinstance(part, str)
+        or isinstance(part, types.File)
+        or (PIL_Image is not None and isinstance(part, PIL_Image))
+        or isinstance(part, types.Part)
+    ):
+      return True
+
+    if isinstance(part, dict):
+      try:
+        types.Part.model_validate(part)
+        return True
+      except pydantic.ValidationError:
+        return False
+
+    return False
+
+  def _is_user_part(part: types.Part) -> bool:
+    return not part.function_call
+
+  def _are_user_parts(parts: list[types.Part]) -> bool:
+    return all(_is_user_part(part) for part in parts)
+
+  def _append_accumulated_parts_as_content(
+      result: list[types.Content],
+      accumulated_parts: list[types.Part],
+  ):
+    if not accumulated_parts:
+      return
+    result.append(
+        types.UserContent(parts=accumulated_parts)
+        if _are_user_parts(accumulated_parts)
+        else types.ModelContent(parts=accumulated_parts)
+    )
+    accumulated_parts[:] = []
+
+  def _handle_current_part(
+      result: list[types.Content],
+      accumulated_parts: list[types.Part],
+      current_part: types.PartUnionDict,
+  ):
+    current_part = t_part(current_part)
+    if _is_user_part(current_part) == _are_user_parts(accumulated_parts):
+      accumulated_parts.append(current_part)
+    else:
+      _append_accumulated_parts_as_content(result, accumulated_parts)
+      accumulated_parts[:] = [current_part]
+
+  # iterator over contents
+  # if content type or content dict, append to result
+  # if consecutive part(s),
+  #   group consecutive user part(s) to a UserContent
+  #   group consecutive model part(s) to a ModelContent
+  #   append to result
+  # if list, we only accept a list of types.PartUnion
+  for content in contents:
+    if (
+        isinstance(content, types.Content)
+        # only allowed inner list is a list of types.PartUnion
+        or isinstance(content, list)
+    ):
+      _append_accumulated_parts_as_content(result, accumulated_parts)
+      if isinstance(content, list):
+        result.append(types.UserContent(parts=content))  # type: ignore[arg-type]
+      else:
+        result.append(content)
+    elif (_is_part(content)):
+      _handle_current_part(result, accumulated_parts, content)
+    elif isinstance(content, dict):
+      # PactDict is already handled in _is_part
+      result.append(types.Content.model_validate(content))
+    else:
+      raise ValueError(f'Unsupported content type: {type(content)}')
+
+  _append_accumulated_parts_as_content(result, accumulated_parts)
+
+  return result
 
 
 def handle_null_fields(schema: dict[str, Any]):
@@ -374,15 +512,18 @@ def handle_null_fields(schema: dict[str, Any]):
         schema['anyOf'].remove({'type': 'null'})
         if len(schema['anyOf']) == 1:
           # If there is only one type left after removing null, remove the anyOf field.
-          for key,val in schema['anyOf'][0].items():
+          for key, val in schema['anyOf'][0].items():
             schema[key] = val
           del schema['anyOf']
 
 
 def process_schema(
     schema: dict[str, Any],
-    client: Optional[_api_client.ApiClient] = None,
-    defs: Optional[dict[str, Any]]=None):
+    client: _api_client.BaseApiClient,
+    defs: Optional[dict[str, Any]] = None,
+    *,
+    order_properties: bool = True,
+):
   """Updates the schema and each sub-schema inplace to be API-compatible.
 
   - Removes the `title` field from the schema if the client is not vertexai.
@@ -441,13 +582,22 @@ def process_schema(
         'type': 'array'
     }
   """
-  if client and not client.vertexai:
+  if not client.vertexai:
     schema.pop('title', None)
 
     if schema.get('default') is not None:
       raise ValueError(
-          'Default value is not supported in the response schema for the Gemini API.'
+          'Default value is not supported in the response schema for the Gemini'
+          ' API.'
       )
+
+  if schema.get('title') == 'PlaceholderLiteralEnum':
+    schema.pop('title', None)
+
+  # If a dict is provided directly to response_schema, it may use `any_of`
+  # instead of `anyOf`. Otherwise model_json_schema() uses `anyOf`
+  if schema.get('any_of', None) is not None:
+    schema['anyOf'] = schema.pop('any_of')
 
   if defs is None:
     defs = schema.pop('$defs', {})
@@ -459,18 +609,15 @@ def process_schema(
   # After removing null fields, Optional fields with only one possible type
   # will have a $ref key that needs to be flattened
   # For example: {'default': None, 'description': 'Name of the person', 'nullable': True, '$ref': '#/$defs/TestPerson'}
-  if schema.get('$ref', None):
-    ref = defs[schema.get('$ref').split('defs/')[-1]]
+  schema_ref = schema.get('$ref', None)
+  if schema_ref is not None:
+    ref = defs[schema_ref.split('defs/')[-1]]
     for schema_key in list(ref.keys()):
       schema[schema_key] = ref[schema_key]
     del schema['$ref']
 
   any_of = schema.get('anyOf', None)
   if any_of is not None:
-    if not client.vertexai:
-      raise ValueError(
-          'AnyOf is not supported in the response schema for the Gemini API.'
-      )
     for sub_schema in any_of:
       # $ref is present in any_of if the schema is a union of Pydantic classes
       ref_key = sub_schema.get('$ref', None)
@@ -487,6 +634,16 @@ def process_schema(
     schema_type = schema_type.value
   schema_type = schema_type.upper()
 
+  # model_json_schema() returns a schema with a 'const' field when a Literal with one value is provided as a pydantic field
+  # For example `genre: Literal['action']` becomes: {'const': 'action', 'title': 'Genre', 'type': 'string'}
+  const = schema.get('const', None)
+  if const is not None:
+    if schema_type == 'STRING':
+      schema['enum'] = [const]
+      del schema['const']
+    else:
+      raise ValueError('Literal values must be strings.')
+
   if schema_type == 'OBJECT':
     properties = schema.get('properties', None)
     if properties is None:
@@ -499,6 +656,16 @@ def process_schema(
         ref = defs[ref_key.split('defs/')[-1]]
         process_schema(ref, client, defs)
         properties[name] = ref
+    if (
+        len(properties.items()) > 1
+        and order_properties
+        and all(
+            ordering_key not in schema
+            for ordering_key in ['property_ordering', 'propertyOrdering']
+        )
+    ):
+      property_names = list(properties.keys())
+      schema['property_ordering'] = property_names
   elif schema_type == 'ARRAY':
     sub_schema = schema.get('items', None)
     if sub_schema is None:
@@ -513,16 +680,17 @@ def process_schema(
 
 
 def _process_enum(
-    enum: EnumMeta, client: Optional[_api_client.ApiClient] = None
+    enum: EnumMeta, client: _api_client.BaseApiClient
 ) -> types.Schema:
-  for member in enum:
+  for member in enum:  # type: ignore
     if not isinstance(member.value, str):
       raise TypeError(
           f'Enum member {member.name} value must be a string, got'
           f' {type(member.value)}'
       )
+
   class Placeholder(pydantic.BaseModel):
-    placeholder: enum
+    placeholder: enum  # type: ignore[valid-type]
 
   enum_schema = Placeholder.model_json_schema()
   process_schema(enum_schema, client)
@@ -530,13 +698,20 @@ def _process_enum(
   return types.Schema.model_validate(enum_schema)
 
 
+def _is_type_dict_str_any(origin: Union[types.SchemaUnionDict, Any]) -> TypeGuard[dict[str, Any]]:
+  """Verifies the schema is of type dict[str, Any] for mypy type checking."""
+  return isinstance(origin, dict) and all(
+      isinstance(key, str) for key in origin
+  )
+
+
 def t_schema(
-    client: _api_client.ApiClient, origin: Union[types.SchemaUnionDict, Any]
+    client: _api_client.BaseApiClient, origin: Union[types.SchemaUnionDict, Any]
 ) -> Optional[types.Schema]:
   if not origin:
     return None
-  if isinstance(origin, dict):
-    process_schema(origin, client)
+  if isinstance(origin, dict) and _is_type_dict_str_any(origin):
+    process_schema(origin, client, order_properties=False)
     return types.Schema.model_validate(origin)
   if isinstance(origin, EnumMeta):
     return _process_enum(origin, client)
@@ -545,15 +720,15 @@ def t_schema(
       # response_schema value was coerced to an empty Schema instance because it did not adhere to the Schema field annotation
       raise ValueError(f'Unsupported schema type.')
     schema = origin.model_dump(exclude_unset=True)
-    process_schema(schema, client)
+    process_schema(schema, client, order_properties=False)
     return types.Schema.model_validate(schema)
 
   if (
       # in Python 3.9 Generic alias list[int] counts as a type,
       # and breaks issubclass because it's not a class.
-      not isinstance(origin, GenericAlias) and
-      isinstance(origin, type) and
-      issubclass(origin, pydantic.BaseModel)
+      not isinstance(origin, GenericAlias)
+      and isinstance(origin, type)
+      and issubclass(origin, pydantic.BaseModel)
   ):
     schema = origin.model_json_schema()
     process_schema(schema, client)
@@ -564,8 +739,9 @@ def t_schema(
       or isinstance(origin, VersionedUnionType)
       or typing.get_origin(origin) in _UNION_TYPES
   ):
+
     class Placeholder(pydantic.BaseModel):
-      placeholder: origin
+      placeholder: origin  # type: ignore[valid-type]
 
     schema = Placeholder.model_json_schema()
     process_schema(schema, client)
@@ -576,7 +752,8 @@ def t_schema(
 
 
 def t_speech_config(
-    _: _api_client.ApiClient, origin: Union[types.SpeechConfigUnionDict, Any]
+    _: _api_client.BaseApiClient,
+    origin: Union[types.SpeechConfigUnionDict, Any],
 ) -> Optional[types.SpeechConfig]:
   if not origin:
     return None
@@ -591,7 +768,10 @@ def t_speech_config(
   if (
       isinstance(origin, dict)
       and 'voice_config' in origin
+      and origin['voice_config'] is not None
       and 'prebuilt_voice_config' in origin['voice_config']
+      and origin['voice_config']['prebuilt_voice_config'] is not None
+      and 'voice_name' in origin['voice_config']['prebuilt_voice_config']
   ):
     return types.SpeechConfig(
         voice_config=types.VoiceConfig(
@@ -605,7 +785,7 @@ def t_speech_config(
   raise ValueError(f'Unsupported speechConfig type: {type(origin)}')
 
 
-def t_tool(client: _api_client.ApiClient, origin) -> types.Tool:
+def t_tool(client: _api_client.BaseApiClient, origin) -> Optional[types.Tool]:
   if not origin:
     return None
   if inspect.isfunction(origin) or inspect.ismethod(origin):
@@ -622,7 +802,7 @@ def t_tool(client: _api_client.ApiClient, origin) -> types.Tool:
 
 # Only support functions now.
 def t_tools(
-    client: _api_client.ApiClient, origin: list[Any]
+    client: _api_client.BaseApiClient, origin: list[Any]
 ) -> list[types.Tool]:
   if not origin:
     return []
@@ -631,22 +811,26 @@ def t_tools(
   for tool in origin:
     transformed_tool = t_tool(client, tool)
     # All functions should be merged into one tool.
-    if transformed_tool.function_declarations:
-      function_tool.function_declarations += (
+    if transformed_tool is not None:
+      if (
           transformed_tool.function_declarations
-      )
-    else:
-      tools.append(transformed_tool)
+          and function_tool.function_declarations is not None
+      ):
+        function_tool.function_declarations += (
+            transformed_tool.function_declarations
+        )
+      else:
+        tools.append(transformed_tool)
   if function_tool.function_declarations:
     tools.append(function_tool)
   return tools
 
 
-def t_cached_content_name(client: _api_client.ApiClient, name: str):
+def t_cached_content_name(client: _api_client.BaseApiClient, name: str):
   return _resource_name(client, name, collection_identifier='cachedContents')
 
 
-def t_batch_job_source(client: _api_client.ApiClient, src: str):
+def t_batch_job_source(client: _api_client.BaseApiClient, src: str):
   if src.startswith('gs://'):
     return types.BatchJobSource(
         format='jsonl',
@@ -661,7 +845,7 @@ def t_batch_job_source(client: _api_client.ApiClient, src: str):
     raise ValueError(f'Unsupported source: {src}')
 
 
-def t_batch_job_destination(client: _api_client.ApiClient, dest: str):
+def t_batch_job_destination(client: _api_client.BaseApiClient, dest: str):
   if dest.startswith('gs://'):
     return types.BatchJobDestination(
         format='jsonl',
@@ -676,7 +860,7 @@ def t_batch_job_destination(client: _api_client.ApiClient, dest: str):
     raise ValueError(f'Unsupported destination: {dest}')
 
 
-def t_batch_job_name(client: _api_client.ApiClient, name: str):
+def t_batch_job_name(client: _api_client.BaseApiClient, name: str):
   if not client.vertexai:
     return name
 
@@ -695,7 +879,7 @@ LRO_POLLING_TIMEOUT_SECONDS = 900.0
 LRO_POLLING_MULTIPLIER = 1.5
 
 
-def t_resolve_operation(api_client: _api_client.ApiClient, struct: dict):
+def t_resolve_operation(api_client: _api_client.BaseApiClient, struct: dict):
   if (name := struct.get('name')) and '/operations/' in name:
     operation: dict[str, Any] = struct
     total_seconds = 0.0
@@ -704,7 +888,7 @@ def t_resolve_operation(api_client: _api_client.ApiClient, struct: dict):
       if total_seconds > LRO_POLLING_TIMEOUT_SECONDS:
         raise RuntimeError(f'Operation {name} timed out.\n{operation}')
       # TODO(b/374433890): Replace with LRO module once it's available.
-      operation: dict[str, Any] = api_client.request(
+      operation = api_client.request(
           http_method='GET', path=name, request_dict={}
       )
       time.sleep(delay_seconds)
@@ -724,14 +908,27 @@ def t_resolve_operation(api_client: _api_client.ApiClient, struct: dict):
 
 
 def t_file_name(
-    api_client: _api_client.ApiClient, name: Union[str, types.File]
+    api_client: _api_client.BaseApiClient,
+    name: Optional[Union[str, types.File, types.Video, types.GeneratedVideo]],
 ):
   # Remove the files/ prefix since it's added to the url path.
   if isinstance(name, types.File):
     name = name.name
+  elif isinstance(name, types.Video):
+    name = name.uri
+  elif isinstance(name, types.GeneratedVideo):
+    if name.video is not None:
+      name = name.video.uri
+    else:
+      name = None
 
   if name is None:
     raise ValueError('File name is required.')
+
+  if not isinstance(name, str):
+    raise ValueError(
+        f'Could not convert object of type `{type(name)}` to a file name.'
+    )
 
   if name.startswith('https://'):
     suffix = name.split('files/')[1]
@@ -746,17 +943,20 @@ def t_file_name(
 
 
 def t_tuning_job_status(
-    api_client: _api_client.ApiClient, status: str
-) -> types.JobState:
+    api_client: _api_client.BaseApiClient, status: str
+) -> Union[types.JobState, str]:
   if status == 'STATE_UNSPECIFIED':
-    return 'JOB_STATE_UNSPECIFIED'
+    return types.JobState.JOB_STATE_UNSPECIFIED
   elif status == 'CREATING':
-    return 'JOB_STATE_RUNNING'
+    return types.JobState.JOB_STATE_RUNNING
   elif status == 'ACTIVE':
-    return 'JOB_STATE_SUCCEEDED'
+    return types.JobState.JOB_STATE_SUCCEEDED
   elif status == 'FAILED':
-    return 'JOB_STATE_FAILED'
+    return types.JobState.JOB_STATE_FAILED
   else:
+    for state in types.JobState:
+      if str(state.value) == status:
+        return state
     return status
 
 
@@ -764,7 +964,7 @@ def t_tuning_job_status(
 # We shouldn't use this transformer if the backend adhere to Cloud Type
 # format https://cloud.google.com/docs/discovery/type-format.
 # TODO(b/389133914,b/390320301): Remove the hack after backend fix the issue.
-def t_bytes(api_client: _api_client.ApiClient, data: bytes) -> str:
+def t_bytes(api_client: _api_client.BaseApiClient, data: bytes) -> str:
   if not isinstance(data, bytes):
     return data
   return base64.b64encode(data).decode('ascii')

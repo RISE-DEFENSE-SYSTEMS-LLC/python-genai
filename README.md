@@ -11,7 +11,7 @@ Google Gen AI Python SDK provides an interface for developers to integrate Googl
 
 ## Installation
 
-```cmd
+```sh
 pip install google-genai
 ```
 
@@ -39,21 +39,56 @@ client = genai.Client(
 )
 ```
 
+**(Optional) Using environment variables:**
+
+You can create a client by configuring the necessary environment variables.
+Configuration setup instructions depends on whether you're using the Gemini
+Developer API or the Gemini API in Vertex AI.
+
+**Gemini Developer API:** Set `GOOGLE_API_KEY` as shown below:
+
+```bash
+export GOOGLE_API_KEY='your-api-key'
+```
+
+**Gemini API on Vertex AI:** Set `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CLOUD_PROJECT`
+and `GOOGLE_CLOUD_LOCATION`, as shown below:
+
+```bash
+export GOOGLE_GENAI_USE_VERTEXAI=true
+export GOOGLE_CLOUD_PROJECT='your-project-id'
+export GOOGLE_CLOUD_LOCATION='us-central1'
+```
+
+```python
+client = genai.Client()
+```
+
+### API Selection
+
+By default, the SDK uses the beta API endpoints provided by Google to support
+preview features in the APIs. The stable API endpoints can be selected by
+setting the API version to `v1`.
+
 To set the API version use `http_options`. For example, to set the API version
 to `v1` for Vertex AI:
 
 ```python
 client = genai.Client(
-    vertexai=True, project='your-project-id', location='us-central1',
-    http_options={'api_version': 'v1'}
+    vertexai=True,
+    project='your-project-id',
+    location='us-central1',
+    http_options=types.HttpOptions(api_version='v1')
 )
 ```
 
-To set the API version to `v1alpha` for the Gemini API:
+To set the API version to `v1alpha` for the Gemini Developer API:
 
 ```python
-client = genai.Client(api_key='GEMINI_API_KEY',
-                      http_options={'api_version': 'v1alpha'})
+client = genai.Client(
+    api_key='GEMINI_API_KEY',
+    http_options=types.HttpOptions(api_version='v1alpha')
+)
 ```
 
 ## Types
@@ -72,22 +107,22 @@ The `client.models` modules exposes model inferencing and model getters.
 
 ```python
 response = client.models.generate_content(
-    model='gemini-2.0-flash-001', contents='why is the sky blue?'
+    model='gemini-2.0-flash-001', contents='Why is the sky blue?'
 )
 print(response.text)
 ```
 
-#### with uploaded file (Gemini API only)
+#### with uploaded file (Gemini Developer API only)
 download the file in console.
 
-```cmd
+```sh
 !wget -q https://storage.googleapis.com/generativeai-downloads/data/a11.txt
 ```
 
 python code.
 
 ```python
-file = client.files.upload(path='a11.txt')
+file = client.files.upload(file='a11.txt')
 response = client.models.generate_content(
     model='gemini-2.0-flash-001',
     contents=['Could you summarize this file?', file]
@@ -95,7 +130,209 @@ response = client.models.generate_content(
 print(response.text)
 ```
 
+#### How to structure `contents` argument for `generate_content`
+The SDK always converts the inputs to the `contents` argument into
+`list[types.Content]`.
+The following shows some common ways to provide your inputs.
+
+##### Provide a `list[types.Content]`
+This is the canonical way to provide contents, SDK will not do any conversion.
+
+##### Provide a `types.Content` instance
+
+```python
+contents = types.Content(
+  role='user',
+  parts=[types.Part.from_text(text='Why is the sky blue?')]
+)
+```
+
+SDK converts this to
+
+```python
+[
+  types.Content(
+    role='user',
+    parts=[types.Part.from_text(text='Why is the sky blue?')]
+  )
+]
+```
+
+##### Provide a string
+
+```python
+contents='Why is the sky blue?'
+```
+
+The SDK will assume this is a text part, and it converts this into the following:
+
+```python
+[
+  types.UserContent(
+    parts=[
+      types.Part.from_text(text='Why is the sky blue?')
+    ]
+  )
+]
+```
+
+Where a `types.UserContent` is a subclass of `types.Content`, it sets the
+`role` field to be `user`.
+
+##### Provide a list of string
+
+```python
+contents=['Why is the sky blue?', 'Why is the cloud white?']
+```
+
+The SDK assumes these are 2 text parts, it converts this into a single content,
+like the following:
+
+```python
+[
+  types.UserContent(
+    parts=[
+      types.Part.from_text(text='Why is the sky blue?'),
+      types.Part.from_text(text='Why is the cloud white?'),
+    ]
+  )
+]
+```
+
+Where a `types.UserContent` is a subclass of `types.Content`, the
+`role` field in `types.UserContent` is fixed to be `user`.
+
+##### Provide a function call part
+
+```python
+contents = types.Part.from_function_call(
+  name='get_weather_by_location',
+  args={'location': 'Boston'}
+)
+```
+
+The SDK converts a function call part to a content with a `model` role:
+
+```python
+[
+  types.ModelContent(
+    parts=[
+      types.Part.from_function_call(
+        name='get_weather_by_location',
+        args={'location': 'Boston'}
+      )
+    ]
+  )
+]
+```
+
+Where a `types.ModelContent` is a subclass of `types.Content`, the
+`role` field in `types.ModelContent` is fixed to be `model`.
+
+##### Provide a list of function call parts
+
+```python
+contents = [
+  types.Part.from_function_call(
+    name='get_weather_by_location',
+    args={'location': 'Boston'}
+  ),
+  types.Part.from_function_call(
+    name='get_weather_by_location',
+    args={'location': 'New York'}
+  ),
+]
+```
+
+The SDK converts a list of function call parts to the a content with a `model` role:
+
+```python
+[
+  types.ModelContent(
+    parts=[
+      types.Part.from_function_call(
+        name='get_weather_by_location',
+        args={'location': 'Boston'}
+      ),
+      types.Part.from_function_call(
+        name='get_weather_by_location',
+        args={'location': 'New York'}
+      )
+    ]
+  )
+]
+```
+
+Where a `types.ModelContent` is a subclass of `types.Content`, the
+`role` field in `types.ModelContent` is fixed to be `model`.
+
+##### Provide a non function call part
+
+```python
+contents = types.Part.from_uri(
+  file_uri: 'gs://generativeai-downloads/images/scones.jpg',
+  mime_type: 'image/jpeg',
+)
+```
+
+The SDK converts all non function call parts into a content with a `user` role.
+
+```python
+[
+  types.UserContent(parts=[
+    types.Part.from_uri(
+     file_uri: 'gs://generativeai-downloads/images/scones.jpg',
+      mime_type: 'image/jpeg',
+    )
+  ])
+]
+```
+
+##### Provide a list of non function call parts
+
+```python
+contents = [
+  types.Part.from_text('What is this image about?'),
+  types.Part.from_uri(
+    file_uri: 'gs://generativeai-downloads/images/scones.jpg',
+    mime_type: 'image/jpeg',
+  )
+]
+```
+
+The SDK will convert the list of parts into a content with a `user` role
+
+```python
+[
+  types.UserContent(
+    parts=[
+      types.Part.from_text('What is this image about?'),
+      types.Part.from_uri(
+        file_uri: 'gs://generativeai-downloads/images/scones.jpg',
+        mime_type: 'image/jpeg',
+      )
+    ]
+  )
+]
+```
+
+##### Mix types in contents
+
+You can also provide a list of `types.ContentUnion`. The SDK leaves items of
+`types.Content` as is, it groups consecutive non function call parts into a
+single `types.UserContent`, and it groups consecutive function call parts into
+a single `types.ModelContent`.
+
+If you put a list within a list, the inner list can only contain
+`types.PartUnion` items. The SDK will convert the inner list into a single
+`types.UserContent`.
+
 ### System Instructions and Other Configs
+
+The output of the model can be influenced by several optional settings
+available in generate_content's config parameter. For example, the
+variability and length of the output can be influenced by the temperature
+and max_output_tokens respectively.
 
 ```python
 response = client.models.generate_content(
@@ -103,6 +340,7 @@ response = client.models.generate_content(
     contents='high',
     config=types.GenerateContentConfig(
         system_instruction='I say high, you say low',
+        max_output_tokens=3,
         temperature=0.3,
     ),
 )
@@ -189,7 +427,7 @@ print(response.text)
 #### Automatic Python function Support
 
 You can pass a Python function directly and it will be automatically
-called and responded.
+called and responded by default.
 
 ```python
 def get_current_weather(location: str) -> str:
@@ -208,6 +446,30 @@ response = client.models.generate_content(
 )
 
 print(response.text)
+```
+#### Disabling automatic function calling
+If you pass in a python function as a tool directly, and do not want
+automatic function calling, you can disable automatic function calling
+as follows:
+
+```python
+response = client.models.generate_content(
+  model='gemini-2.0-flash-001',
+  contents='What is the weather like in Boston?',
+  config=types.GenerateContentConfig(
+    tools=[get_current_weather],
+    automatic_function_calling=types.AutomaticFunctionCallingConfig(
+      disable=True
+    ),
+  ),
+)
+```
+
+With automatic function calling disabled, you will get a list of function call
+parts in the response:
+
+```python
+function_calls: Optional[List[types.FunctionCall]] = response.function_calls
 ```
 
 #### Manually declare and invoke a function for function calling
@@ -354,6 +616,10 @@ response = client.models.generate_content(
 )
 ```
 ### JSON Response Schema
+
+However you define your schema, don't duplicate it in your input prompt,
+including by giving examples of expected JSON output. If you do, the generated
+output might be lower in quality.
 
 #### Pydantic Model Schema support
 
@@ -606,7 +872,6 @@ response1 = client.models.generate_images(
     model='imagen-3.0-generate-002',
     prompt='An umbrella in the foreground, and a rainy night sky in the background',
     config=types.GenerateImagesConfig(
-        negative_prompt='human',
         number_of_images=1,
         include_rai_reason=True,
         output_mime_type='image/jpeg',
@@ -664,12 +929,39 @@ response3 = client.models.edit_image(
     config=types.EditImageConfig(
         edit_mode='EDIT_MODE_INPAINT_INSERTION',
         number_of_images=1,
-        negative_prompt='human',
         include_rai_reason=True,
         output_mime_type='image/jpeg',
     ),
 )
 response3.generated_images[0].image.show()
+```
+
+### Veo
+
+#### Generate Videos
+
+Support for generate videos in Vertex and Gemini Developer API is behind an allowlist
+
+```python
+# Create operation
+operation = client.models.generate_videos(
+    model='veo-2.0-generate-001',
+    prompt='A neon hologram of a cat driving at top speed',
+    config=types.GenerateVideosConfig(
+        number_of_videos=1,
+        fps=24,
+        duration_seconds=5,
+        enhance_prompt=True,
+    ),
+)
+
+# Poll operation
+while not operation.done:
+    time.sleep(20)
+    operation = client.operations.get(operation)
+
+video = operation.result.generated_videos[0].video
+video.show()
 ```
 
 ## Chats
@@ -720,17 +1012,24 @@ Files are only supported in Gemini Developer API.
 ### Upload
 
 ```python
-file1 = client.files.upload(path='2312.11805v3.pdf')
-file2 = client.files.upload(path='2403.05530.pdf')
+file1 = client.files.upload(file='2312.11805v3.pdf')
+file2 = client.files.upload(file='2403.05530.pdf')
 
 print(file1)
 print(file2)
 ```
 
+### Get
+
+```python
+file1 = client.files.upload(file='2312.11805v3.pdf')
+file_info = client.files.get(name=file1.name)
+```
+
 ### Delete
 
 ```python
-file3 = client.files.upload(path='2312.11805v3.pdf')
+file3 = client.files.upload(file='2312.11805v3.pdf')
 
 client.files.delete(name=file3.name)
 ```
@@ -1034,4 +1333,21 @@ print(async_pager[0])
 delete_job = client.batches.delete(name=job.name)
 
 delete_job
+```
+
+## Error Handling
+
+To handle errors raised by the model service, the SDK provides this [APIError](https://github.com/googleapis/python-genai/blob/main/google/genai/errors.py) class.
+
+```python
+from google.genai import errors
+
+try:
+  client.models.generate_content(
+      model="invalid-model-name",
+      contents="What is your name?",
+  )
+except errors.APIError as e:
+  print(e.code) # 404
+  print(e.message)
 ```

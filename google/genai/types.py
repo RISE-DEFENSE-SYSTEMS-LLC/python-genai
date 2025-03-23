@@ -21,19 +21,21 @@ import inspect
 import json
 import logging
 import sys
+import types as builtin_types
 import typing
-from typing import Any, Callable, GenericAlias, Literal, Optional, Type, TypedDict, Union
+from typing import Any, Callable, Literal, Optional, Union, _UnionGenericAlias  # type: ignore
 import pydantic
 from pydantic import Field
+from typing_extensions import TypedDict
 from . import _common
 
 if sys.version_info >= (3, 10):
   # Supports both Union[t1, t2] and t1 | t2
-  VersionedUnionType = Union[typing.types.UnionType, typing._UnionGenericAlias]
-  _UNION_TYPES = (typing.Union, typing.types.UnionType)
+  VersionedUnionType = Union[builtin_types.UnionType, _UnionGenericAlias]
+  _UNION_TYPES = (typing.Union, builtin_types.UnionType)
 else:
   # Supports only Union[t1, t2]
-  VersionedUnionType = typing._UnionGenericAlias
+  VersionedUnionType = _UnionGenericAlias
   _UNION_TYPES = (typing.Union,)
 
 _is_pillow_image_imported = False
@@ -43,7 +45,7 @@ if typing.TYPE_CHECKING:
   PIL_Image = PIL.Image.Image
   _is_pillow_image_imported = True
 else:
-  PIL_Image: Type = Any
+  PIL_Image: typing.Type = Any
   try:
     import PIL.Image
 
@@ -51,6 +53,10 @@ else:
     _is_pillow_image_imported = True
   except ImportError:
     PIL_Image = None
+
+logger = logging.getLogger('google_genai.types')
+
+T = typing.TypeVar('T', bound='GenerateContentResponse')
 
 
 class Outcome(_common.CaseInSensitiveEnum):
@@ -70,7 +76,7 @@ class Language(_common.CaseInSensitiveEnum):
 
 
 class Type(_common.CaseInSensitiveEnum):
-  """A basic data type."""
+  """Optional. The type of the data."""
 
   TYPE_UNSPECIFIED = 'TYPE_UNSPECIFIED'
   STRING = 'STRING'
@@ -131,10 +137,9 @@ class State(_common.CaseInSensitiveEnum):
 
 
 class FinishReason(_common.CaseInSensitiveEnum):
-  """Output only.
+  """Output only. The reason why the model stopped generating tokens.
 
-  The reason why the model stopped generating tokens. If empty, the model has
-  not stopped generating the tokens.
+  If empty, the model has not stopped generating the tokens.
   """
 
   FINISH_REASON_UNSPECIFIED = 'FINISH_REASON_UNSPECIFIED'
@@ -147,6 +152,7 @@ class FinishReason(_common.CaseInSensitiveEnum):
   PROHIBITED_CONTENT = 'PROHIBITED_CONTENT'
   SPII = 'SPII'
   MALFORMED_FUNCTION_CALL = 'MALFORMED_FUNCTION_CALL'
+  IMAGE_SAFETY = 'IMAGE_SAFETY'
 
 
 class HarmProbability(_common.CaseInSensitiveEnum):
@@ -177,6 +183,15 @@ class BlockedReason(_common.CaseInSensitiveEnum):
   OTHER = 'OTHER'
   BLOCKLIST = 'BLOCKLIST'
   PROHIBITED_CONTENT = 'PROHIBITED_CONTENT'
+
+
+class Modality(_common.CaseInSensitiveEnum):
+  """Server content modalities."""
+
+  MODALITY_UNSPECIFIED = 'MODALITY_UNSPECIFIED'
+  TEXT = 'TEXT'
+  IMAGE = 'IMAGE'
+  AUDIO = 'AUDIO'
 
 
 class DeploymentResourcesType(_common.CaseInSensitiveEnum):
@@ -326,15 +341,6 @@ class FileSource(_common.CaseInSensitiveEnum):
   SOURCE_UNSPECIFIED = 'SOURCE_UNSPECIFIED'
   UPLOADED = 'UPLOADED'
   GENERATED = 'GENERATED'
-
-
-class Modality(_common.CaseInSensitiveEnum):
-  """Server content modalities."""
-
-  MODALITY_UNSPECIFIED = 'MODALITY_UNSPECIFIED'
-  TEXT = 'TEXT'
-  IMAGE = 'IMAGE'
-  AUDIO = 'AUDIO'
 
 
 class VideoMetadata(_common.BaseModel):
@@ -617,6 +623,11 @@ class Part(_common.BaseModel):
 
   @classmethod
   def from_video_metadata(cls, *, start_offset: str, end_offset: str) -> 'Part':
+    logger.warning("""Part.from_video_metadata will be deprecated soon.
+           Because a Part instance needs to include at least one of the fields:
+           text, file_data, inline_data, function_call, function_response, executable_code or code_execution_result.
+           A Part instance contains only video_metadata is not a valid Part.
+        """)
     video_metadata = VideoMetadata(
         end_offset=end_offset, start_offset=start_offset
     )
@@ -690,6 +701,67 @@ class Content(_common.BaseModel):
   )
 
 
+class UserContent(Content):
+  """UserContent facilitates the creation of a Content object with a user role.
+
+  Example usages:
+
+
+  - Create a user Content object with a string:
+    user_content = UserContent("Why is the sky blue?")
+  - Create a user Content object with a file data Part object:
+    user_content = UserContent(Part.from_uri(file_uril="gs://bucket/file.txt",
+    mime_type="text/plain"))
+  - Create a user Content object with byte data Part object:
+    user_content = UserContent(Part.from_bytes(data=b"Hello, World!",
+    mime_type="text/plain"))
+
+    You can create a user Content object using other classmethods in the Part
+    class as well.
+    You can also create a user Content using a list of Part objects or strings.
+  """
+
+  role: Literal['user'] = Field(default='user', init=False, frozen=True)
+  parts: list[Part] = Field()
+
+  def __init__(
+      self, parts: Union['PartUnionDict', list['PartUnionDict'], list['Part']]
+  ):
+    from . import _transformers as t
+
+    super().__init__(parts=t.t_parts(parts=parts))
+
+
+class ModelContent(Content):
+  """ModelContent facilitates the creation of a Content object with a model role.
+
+  Example usages:
+
+  - Create a model Content object with a string:
+    model_content = ModelContent("Why is the sky blue?")
+  - Create a model Content object with a file data Part object:
+    model_content = ModelContent(Part.from_uri(file_uril="gs://bucket/file.txt",
+    mime_type="text/plain"))
+  - Create a model Content object with byte data Part object:
+    model_content = ModelContent(Part.from_bytes(data=b"Hello, World!",
+    mime_type="text/plain"))
+
+    You can create a model Content object using other classmethods in the Part
+    class as well.
+    You can also create a model Content using a list of Part objects or strings.
+  """
+
+  role: Literal['model'] = Field(default='model', init=False, frozen=True)
+  parts: list[Part] = Field()
+
+  def __init__(
+      self, parts: Union['PartUnionDict', list['PartUnionDict'], list['Part']]
+  ):
+    from . import _transformers as t
+
+    super().__init__(parts=t.t_parts(parts=parts))
+
+
 class ContentDict(TypedDict, total=False):
   """Contains the multi-part content of a message."""
 
@@ -750,32 +822,16 @@ class Schema(_common.BaseModel):
   Represents a select subset of an OpenAPI 3.0 schema object.
   """
 
-  min_items: Optional[int] = Field(
-      default=None,
-      description="""Optional. Minimum number of the elements for Type.ARRAY.""",
-  )
   example: Optional[Any] = Field(
       default=None,
       description="""Optional. Example of the object. Will only populated when the object is the root.""",
-  )
-  property_ordering: Optional[list[str]] = Field(
-      default=None,
-      description="""Optional. The order of the properties. Not a standard field in open api spec. Only used to support the order of the properties.""",
   )
   pattern: Optional[str] = Field(
       default=None,
       description="""Optional. Pattern of the Type.STRING to restrict a string to a regular expression.""",
   )
-  minimum: Optional[float] = Field(
-      default=None,
-      description="""Optional. SCHEMA FIELDS FOR TYPE INTEGER and NUMBER Minimum value of the Type.INTEGER and Type.NUMBER""",
-  )
   default: Optional[Any] = Field(
       default=None, description="""Optional. Default value of the data."""
-  )
-  any_of: list['Schema'] = Field(
-      default=None,
-      description="""Optional. The value should be validated against any (one or more) of the subschemas in the list.""",
   )
   max_length: Optional[int] = Field(
       default=None,
@@ -792,24 +848,13 @@ class Schema(_common.BaseModel):
       default=None,
       description="""Optional. Minimum number of the properties for Type.OBJECT.""",
   )
-  max_items: Optional[int] = Field(
-      default=None,
-      description="""Optional. Maximum number of the elements for Type.ARRAY.""",
-  )
-  maximum: Optional[float] = Field(
-      default=None,
-      description="""Optional. Maximum value of the Type.INTEGER and Type.NUMBER""",
-  )
-  nullable: Optional[bool] = Field(
-      default=None,
-      description="""Optional. Indicates if the value may be null.""",
-  )
   max_properties: Optional[int] = Field(
       default=None,
       description="""Optional. Maximum number of the properties for Type.OBJECT.""",
   )
-  type: Optional[Type] = Field(
-      default=None, description="""Optional. The type of the data."""
+  any_of: Optional[list['Schema']] = Field(
+      default=None,
+      description="""Optional. The value should be validated against any (one or more) of the subschemas in the list.""",
   )
   description: Optional[str] = Field(
       default=None, description="""Optional. The description of the data."""
@@ -822,17 +867,44 @@ class Schema(_common.BaseModel):
       default=None,
       description="""Optional. The format of the data. Supported formats: for NUMBER type: "float", "double" for INTEGER type: "int32", "int64" for STRING type: "email", "byte", etc""",
   )
-  items: 'Schema' = Field(
+  items: Optional['Schema'] = Field(
       default=None,
       description="""Optional. SCHEMA FIELDS FOR TYPE ARRAY Schema of the elements of Type.ARRAY.""",
   )
-  properties: dict[str, 'Schema'] = Field(
+  max_items: Optional[int] = Field(
+      default=None,
+      description="""Optional. Maximum number of the elements for Type.ARRAY.""",
+  )
+  maximum: Optional[float] = Field(
+      default=None,
+      description="""Optional. Maximum value of the Type.INTEGER and Type.NUMBER""",
+  )
+  min_items: Optional[int] = Field(
+      default=None,
+      description="""Optional. Minimum number of the elements for Type.ARRAY.""",
+  )
+  minimum: Optional[float] = Field(
+      default=None,
+      description="""Optional. SCHEMA FIELDS FOR TYPE INTEGER and NUMBER Minimum value of the Type.INTEGER and Type.NUMBER""",
+  )
+  nullable: Optional[bool] = Field(
+      default=None,
+      description="""Optional. Indicates if the value may be null.""",
+  )
+  properties: Optional[dict[str, 'Schema']] = Field(
       default=None,
       description="""Optional. SCHEMA FIELDS FOR TYPE OBJECT Properties of Type.OBJECT.""",
+  )
+  property_ordering: Optional[list[str]] = Field(
+      default=None,
+      description="""Optional. The order of the properties. Not a standard field in open api spec. Only used to support the order of the properties.""",
   )
   required: Optional[list[str]] = Field(
       default=None,
       description="""Optional. Required properties of Type.OBJECT.""",
+  )
+  type: Optional[Type] = Field(
+      default=None, description="""Optional. The type of the data."""
   )
 
 
@@ -842,26 +914,14 @@ class SchemaDict(TypedDict, total=False):
   Represents a select subset of an OpenAPI 3.0 schema object.
   """
 
-  min_items: Optional[int]
-  """Optional. Minimum number of the elements for Type.ARRAY."""
-
   example: Optional[Any]
   """Optional. Example of the object. Will only populated when the object is the root."""
-
-  property_ordering: Optional[list[str]]
-  """Optional. The order of the properties. Not a standard field in open api spec. Only used to support the order of the properties."""
 
   pattern: Optional[str]
   """Optional. Pattern of the Type.STRING to restrict a string to a regular expression."""
 
-  minimum: Optional[float]
-  """Optional. SCHEMA FIELDS FOR TYPE INTEGER and NUMBER Minimum value of the Type.INTEGER and Type.NUMBER"""
-
   default: Optional[Any]
   """Optional. Default value of the data."""
-
-  any_of: list['SchemaDict']
-  """Optional. The value should be validated against any (one or more) of the subschemas in the list."""
 
   max_length: Optional[int]
   """Optional. Maximum length of the Type.STRING"""
@@ -875,20 +935,11 @@ class SchemaDict(TypedDict, total=False):
   min_properties: Optional[int]
   """Optional. Minimum number of the properties for Type.OBJECT."""
 
-  max_items: Optional[int]
-  """Optional. Maximum number of the elements for Type.ARRAY."""
-
-  maximum: Optional[float]
-  """Optional. Maximum value of the Type.INTEGER and Type.NUMBER"""
-
-  nullable: Optional[bool]
-  """Optional. Indicates if the value may be null."""
-
   max_properties: Optional[int]
   """Optional. Maximum number of the properties for Type.OBJECT."""
 
-  type: Optional[Type]
-  """Optional. The type of the data."""
+  any_of: Optional[list['SchemaDict']]
+  """Optional. The value should be validated against any (one or more) of the subschemas in the list."""
 
   description: Optional[str]
   """Optional. The description of the data."""
@@ -899,14 +950,35 @@ class SchemaDict(TypedDict, total=False):
   format: Optional[str]
   """Optional. The format of the data. Supported formats: for NUMBER type: "float", "double" for INTEGER type: "int32", "int64" for STRING type: "email", "byte", etc"""
 
-  items: 'SchemaDict'
+  items: Optional['SchemaDict']
   """Optional. SCHEMA FIELDS FOR TYPE ARRAY Schema of the elements of Type.ARRAY."""
 
-  properties: dict[str, 'SchemaDict']
+  max_items: Optional[int]
+  """Optional. Maximum number of the elements for Type.ARRAY."""
+
+  maximum: Optional[float]
+  """Optional. Maximum value of the Type.INTEGER and Type.NUMBER"""
+
+  min_items: Optional[int]
+  """Optional. Minimum number of the elements for Type.ARRAY."""
+
+  minimum: Optional[float]
+  """Optional. SCHEMA FIELDS FOR TYPE INTEGER and NUMBER Minimum value of the Type.INTEGER and Type.NUMBER"""
+
+  nullable: Optional[bool]
+  """Optional. Indicates if the value may be null."""
+
+  properties: Optional[dict[str, 'SchemaDict']]
   """Optional. SCHEMA FIELDS FOR TYPE OBJECT Properties of Type.OBJECT."""
+
+  property_ordering: Optional[list[str]]
+  """Optional. The order of the properties. Not a standard field in open api spec. Only used to support the order of the properties."""
 
   required: Optional[list[str]]
   """Optional. Required properties of Type.OBJECT."""
+
+  type: Optional[Type]
+  """Optional. The type of the data."""
 
 
 SchemaOrDict = Union[Schema, SchemaDict]
@@ -1011,12 +1083,11 @@ class FunctionDeclaration(_common.BaseModel):
           type='OBJECT',
           properties=parameters_properties,
       )
-      if api_option == 'VERTEX_AI':
-        declaration.parameters.required = (
-            _automatic_function_calling_util._get_required_fields(
-                declaration.parameters
-            )
-        )
+      declaration.parameters.required = (
+          _automatic_function_calling_util._get_required_fields(
+              declaration.parameters
+          )
+      )
     if api_option == 'GEMINI_API':
       return declaration
 
@@ -1592,7 +1663,7 @@ class File(_common.BaseModel):
   )
   expiration_time: Optional[datetime.datetime] = Field(
       default=None,
-      description="""Optional. The human-readable display name for the `File`. The display name must be no more than 512 characters in length, including spaces. Example: 'Welcome Image'""",
+      description="""Output only. The timestamp of when the `File` will be deleted. Only set if the `File` is scheduled to expire.""",
   )
   update_time: Optional[datetime.datetime] = Field(
       default=None,
@@ -1600,7 +1671,7 @@ class File(_common.BaseModel):
   )
   sha256_hash: Optional[str] = Field(
       default=None,
-      description="""Output only. SHA-256 hash of the uploaded bytes.""",
+      description="""Output only. SHA-256 hash of the uploaded bytes. The hash value is encoded in base64 format.""",
   )
   uri: Optional[str] = Field(
       default=None, description="""Output only. The URI of the `File`."""
@@ -1643,13 +1714,13 @@ class FileDict(TypedDict, total=False):
   """Output only. The timestamp of when the `File` was created."""
 
   expiration_time: Optional[datetime.datetime]
-  """Optional. The human-readable display name for the `File`. The display name must be no more than 512 characters in length, including spaces. Example: 'Welcome Image'"""
+  """Output only. The timestamp of when the `File` will be deleted. Only set if the `File` is scheduled to expire."""
 
   update_time: Optional[datetime.datetime]
   """Output only. The timestamp of when the `File` was last updated."""
 
   sha256_hash: Optional[str]
-  """Output only. SHA-256 hash of the uploaded bytes."""
+  """Output only. SHA-256 hash of the uploaded bytes. The hash value is encoded in base64 format."""
 
   uri: Optional[str]
   """Output only. The URI of the `File`."""
@@ -1675,7 +1746,7 @@ FileOrDict = Union[File, FileDict]
 if _is_pillow_image_imported:
   PartUnion = Union[File, Part, PIL_Image, str]
 else:
-  PartUnion = Union[File, Part, str]
+  PartUnion = Union[File, Part, str]  # type: ignore[misc]
 
 
 PartUnionDict = Union[PartUnion, PartDict]
@@ -1687,7 +1758,9 @@ ContentUnion = Union[Content, list[PartUnion], PartUnion]
 ContentUnionDict = Union[ContentUnion, ContentDict]
 
 
-SchemaUnion = Union[dict, type, Schema, GenericAlias, VersionedUnionType]
+SchemaUnion = Union[
+    dict, type, Schema, builtin_types.GenericAlias, VersionedUnionType
+]
 
 
 SchemaUnionDict = Union[SchemaUnion, SchemaDict]
@@ -1936,6 +2009,20 @@ class GenerateContentConfig(_common.BaseModel):
       description="""The thinking features configuration.
       """,
   )
+
+  @pydantic.field_validator('response_schema', mode='before')
+  @classmethod
+  def _convert_literal_to_enum(cls, value):
+    if typing.get_origin(value) is typing.Literal:
+      enum_vals = typing.get_args(value)
+      if not all(isinstance(arg, str) for arg in enum_vals):
+        # This doesn't stop execution, it tells pydantic to raise a ValidationError
+        # when the class is instantiated with an unsupported Literal
+        raise ValueError(f'Literal type {value} must be a list of strings.')
+      # The title 'PlaceholderLiteralEnum' is removed from the generated Schema
+      # before sending the request
+      return Enum('PlaceholderLiteralEnum', {s: s for s in enum_vals})
+    return value
 
 
 class GenerateContentConfigDict(TypedDict, total=False):
@@ -2658,13 +2745,15 @@ class Candidate(_common.BaseModel):
       description="""Number of tokens for this candidate.
       """,
   )
+  finish_reason: Optional[FinishReason] = Field(
+      default=None,
+      description="""The reason why the model stopped generating tokens.
+      If empty, the model has not stopped generating the tokens.
+      """,
+  )
   avg_logprobs: Optional[float] = Field(
       default=None,
       description="""Output only. Average log probability score of the candidate.""",
-  )
-  finish_reason: Optional[FinishReason] = Field(
-      default=None,
-      description="""Output only. The reason why the model stopped generating tokens. If empty, the model has not stopped generating the tokens.""",
   )
   grounding_metadata: Optional[GroundingMetadata] = Field(
       default=None,
@@ -2702,11 +2791,13 @@ class CandidateDict(TypedDict, total=False):
   """Number of tokens for this candidate.
       """
 
+  finish_reason: Optional[FinishReason]
+  """The reason why the model stopped generating tokens.
+      If empty, the model has not stopped generating the tokens.
+      """
+
   avg_logprobs: Optional[float]
   """Output only. Average log probability score of the candidate."""
-
-  finish_reason: Optional[FinishReason]
-  """Output only. The reason why the model stopped generating tokens. If empty, the model has not stopped generating the tokens."""
 
   grounding_metadata: Optional[GroundingMetadataDict]
   """Output only. Metadata specifies sources used to ground generated content."""
@@ -2758,9 +2849,38 @@ GenerateContentResponsePromptFeedbackOrDict = Union[
 ]
 
 
+class ModalityTokenCount(_common.BaseModel):
+  """Represents token counting info for a single modality."""
+
+  modality: Optional[Modality] = Field(
+      default=None,
+      description="""The modality associated with this token count.""",
+  )
+  token_count: Optional[int] = Field(
+      default=None, description="""Number of tokens."""
+  )
+
+
+class ModalityTokenCountDict(TypedDict, total=False):
+  """Represents token counting info for a single modality."""
+
+  modality: Optional[Modality]
+  """The modality associated with this token count."""
+
+  token_count: Optional[int]
+  """Number of tokens."""
+
+
+ModalityTokenCountOrDict = Union[ModalityTokenCount, ModalityTokenCountDict]
+
+
 class GenerateContentResponseUsageMetadata(_common.BaseModel):
   """Usage metadata about response(s)."""
 
+  cache_tokens_details: Optional[list[ModalityTokenCount]] = Field(
+      default=None,
+      description="""Output only. List of modalities of the cached content in the request input.""",
+  )
   cached_content_token_count: Optional[int] = Field(
       default=None,
       description="""Output only. Number of tokens in the cached part in the input (the cached content).""",
@@ -2768,18 +2888,41 @@ class GenerateContentResponseUsageMetadata(_common.BaseModel):
   candidates_token_count: Optional[int] = Field(
       default=None, description="""Number of tokens in the response(s)."""
   )
+  candidates_tokens_details: Optional[list[ModalityTokenCount]] = Field(
+      default=None,
+      description="""Output only. List of modalities that were returned in the response.""",
+  )
   prompt_token_count: Optional[int] = Field(
       default=None,
       description="""Number of tokens in the request. When `cached_content` is set, this is still the total effective prompt size meaning this includes the number of tokens in the cached content.""",
   )
+  prompt_tokens_details: Optional[list[ModalityTokenCount]] = Field(
+      default=None,
+      description="""Output only. List of modalities that were processed in the request input.""",
+  )
+  thoughts_token_count: Optional[int] = Field(
+      default=None,
+      description="""Output only. Number of tokens present in thoughts output.""",
+  )
+  tool_use_prompt_token_count: Optional[int] = Field(
+      default=None,
+      description="""Output only. Number of tokens present in tool-use prompt(s).""",
+  )
+  tool_use_prompt_tokens_details: Optional[list[ModalityTokenCount]] = Field(
+      default=None,
+      description="""Output only. List of modalities that were processed for tool-use request inputs.""",
+  )
   total_token_count: Optional[int] = Field(
       default=None,
-      description="""Total token count for prompt and response candidates.""",
+      description="""Total token count for prompt, response candidates, and tool-use prompts (if present).""",
   )
 
 
 class GenerateContentResponseUsageMetadataDict(TypedDict, total=False):
   """Usage metadata about response(s)."""
+
+  cache_tokens_details: Optional[list[ModalityTokenCountDict]]
+  """Output only. List of modalities of the cached content in the request input."""
 
   cached_content_token_count: Optional[int]
   """Output only. Number of tokens in the cached part in the input (the cached content)."""
@@ -2787,11 +2930,26 @@ class GenerateContentResponseUsageMetadataDict(TypedDict, total=False):
   candidates_token_count: Optional[int]
   """Number of tokens in the response(s)."""
 
+  candidates_tokens_details: Optional[list[ModalityTokenCountDict]]
+  """Output only. List of modalities that were returned in the response."""
+
   prompt_token_count: Optional[int]
   """Number of tokens in the request. When `cached_content` is set, this is still the total effective prompt size meaning this includes the number of tokens in the cached content."""
 
+  prompt_tokens_details: Optional[list[ModalityTokenCountDict]]
+  """Output only. List of modalities that were processed in the request input."""
+
+  thoughts_token_count: Optional[int]
+  """Output only. Number of tokens present in thoughts output."""
+
+  tool_use_prompt_token_count: Optional[int]
+  """Output only. Number of tokens present in tool-use prompt(s)."""
+
+  tool_use_prompt_tokens_details: Optional[list[ModalityTokenCountDict]]
+  """Output only. List of modalities that were processed for tool-use request inputs."""
+
   total_token_count: Optional[int]
-  """Total token count for prompt and response candidates."""
+  """Total token count for prompt, response candidates, and tool-use prompts (if present)."""
 
 
 GenerateContentResponseUsageMetadataOrDict = Union[
@@ -2808,6 +2966,16 @@ class GenerateContentResponse(_common.BaseModel):
       description="""Response variations returned by the model.
       """,
   )
+  create_time: Optional[datetime.datetime] = Field(
+      default=None,
+      description="""Timestamp when the request is made to the server.
+      """,
+  )
+  response_id: Optional[str] = Field(
+      default=None,
+      description="""Identifier for each response.
+      """,
+  )
   model_version: Optional[str] = Field(
       default=None,
       description="""Output only. The model version used to generate the response.""",
@@ -2820,7 +2988,7 @@ class GenerateContentResponse(_common.BaseModel):
       default=None, description="""Usage metadata about the response(s)."""
   )
   automatic_function_calling_history: Optional[list[Content]] = None
-  parsed: Union[pydantic.BaseModel, dict, Enum] = Field(
+  parsed: Optional[Union[pydantic.BaseModel, dict, Enum]] = Field(
       default=None,
       description="""Parsed response if response_schema is provided. Not available for streaming.""",
   )
@@ -2835,27 +3003,31 @@ class GenerateContentResponse(_common.BaseModel):
     ):
       return None
     if len(self.candidates) > 1:
-      logging.warning(
+      logger.warning(
           f'there are {len(self.candidates)} candidates, returning text from'
           ' the first candidate.Access response.candidates directly to get'
           ' text from other candidates.'
       )
     text = ''
     any_text_part_text = False
+    non_text_parts = []
     for part in self.candidates[0].content.parts:
-      for field_name, field_value in part.dict(
+      for field_name, field_value in part.model_dump(
           exclude={'text', 'thought'}
       ).items():
         if field_value is not None:
-          raise ValueError(
-              'GenerateContentResponse.text only supports text parts, but got'
-              f' {field_name} part{part}'
-          )
+          non_text_parts.append(field_name)
       if isinstance(part.text, str):
         if isinstance(part.thought, bool) and part.thought:
           continue
         any_text_part_text = True
         text += part.text
+    if non_text_parts:
+      logger.warning(
+          'Warning: there are non-text parts in the response:'
+          f' {non_text_parts},returning concatenated text from text parts,check'
+          ' out the non text parts for full response from model.'
+      )
     # part.text == '' is different from part.text is None
     return text if any_text_part_text else None
 
@@ -2869,7 +3041,7 @@ class GenerateContentResponse(_common.BaseModel):
     ):
       return None
     if len(self.candidates) > 1:
-      logging.warning(
+      logger.warning(
           'Warning: there are multiple candidates in the response, returning'
           ' function calls from the first one.'
       )
@@ -2881,11 +3053,52 @@ class GenerateContentResponse(_common.BaseModel):
 
     return function_calls if function_calls else None
 
+  @property
+  def executable_code(self) -> Optional[str]:
+    """Returns the executable code in the response."""
+    if (
+        not self.candidates
+        or not self.candidates[0].content
+        or not self.candidates[0].content.parts
+    ):
+      return None
+    if len(self.candidates) > 1:
+      logging.warning(
+          'Warning: there are multiple candidates in the response, returning'
+          ' executable code from the first one.'
+      )
+    for part in self.candidates[0].content.parts:
+      if part.executable_code is not None:
+        return part.executable_code.code
+    return None
+
+  @property
+  def code_execution_result(self) -> Optional[str]:
+    """Returns the code execution result in the response."""
+    if (
+        not self.candidates
+        or not self.candidates[0].content
+        or not self.candidates[0].content.parts
+    ):
+      return None
+    if len(self.candidates) > 1:
+      logging.warning(
+          'Warning: there are multiple candidates in the response, returning'
+          ' code execution result from the first one.'
+      )
+    for part in self.candidates[0].content.parts:
+      if part.code_execution_result is not None:
+        return part.code_execution_result.output
+    return None
+
   @classmethod
   def _from_response(
-      cls, *, response: dict[str, object], kwargs: dict[str, object]
-  ):
-    result = super()._from_response(response, kwargs)
+      cls: typing.Type[T],
+      *,
+      response: dict[str, object],
+      kwargs: dict[str, object],
+  ) -> T:
+    result = super()._from_response(response=response, kwargs=kwargs)
 
     # Handles response schema.
     response_schema = _common.get_value_by_path(
@@ -2894,36 +3107,43 @@ class GenerateContentResponse(_common.BaseModel):
     if (
         inspect.isclass(response_schema)
         and not (
-            isinstance(response_schema, GenericAlias)
+            isinstance(response_schema, builtin_types.GenericAlias)
         )  # Needed for Python 3.9 and 3.10
         and issubclass(response_schema, pydantic.BaseModel)
     ):
       # Pydantic schema.
       try:
-        result.parsed = response_schema.model_validate_json(result.text)
+        if result.text is not None:
+          result.parsed = response_schema.model_validate_json(result.text)
       # may not be a valid json per stream response
       except pydantic.ValidationError:
         pass
       except json.decoder.JSONDecodeError:
         pass
-    elif isinstance(response_schema, EnumMeta):
+    elif isinstance(response_schema, EnumMeta) and result.text is not None:
       # Enum with "application/json" returns response in double quotes.
       enum_value = result.text.replace('"', '')
       try:
         result.parsed = response_schema(enum_value)
+        if (
+            hasattr(response_schema, '__name__')
+            and response_schema.__name__ == 'PlaceholderLiteralEnum'
+        ):
+          result.parsed = str(response_schema(enum_value).name)  # type: ignore
       except ValueError:
         pass
-    elif isinstance(response_schema, GenericAlias) or isinstance(
+    elif isinstance(response_schema, builtin_types.GenericAlias) or isinstance(
         response_schema, type
     ):
 
       class Placeholder(pydantic.BaseModel):
-        placeholder: response_schema
+        placeholder: response_schema  # type: ignore[valid-type]
 
       try:
-        parsed = {'placeholder': json.loads(result.text)}
-        placeholder = Placeholder.model_validate(parsed)
-        result.parsed = placeholder.placeholder
+        if result.text is not None:
+          parsed = {'placeholder': json.loads(result.text)}
+          placeholder = Placeholder.model_validate(parsed)
+          result.parsed = placeholder.placeholder
       except json.decoder.JSONDecodeError:
         pass
       except pydantic.ValidationError:
@@ -2936,7 +3156,8 @@ class GenerateContentResponse(_common.BaseModel):
       # want the result converted to. So just return json.
       # JSON schema.
       try:
-        result.parsed = json.loads(result.text)
+        if result.text is not None:
+          result.parsed = json.loads(result.text)
       # may not be a valid json per stream response
       except json.decoder.JSONDecodeError:
         pass
@@ -2946,20 +3167,22 @@ class GenerateContentResponse(_common.BaseModel):
       for union_type in union_types:
         if issubclass(union_type, pydantic.BaseModel):
           try:
+            if result.text is not None:
 
-            class Placeholder(pydantic.BaseModel):
-              placeholder: response_schema
+              class Placeholder(pydantic.BaseModel):  # type: ignore[no-redef]
+                placeholder: response_schema  # type: ignore[valid-type]
 
-            parsed = {'placeholder': json.loads(result.text)}
-            placeholder = Placeholder.model_validate(parsed)
-            result.parsed = placeholder.placeholder
+              parsed = {'placeholder': json.loads(result.text)}
+              placeholder = Placeholder.model_validate(parsed)
+              result.parsed = placeholder.placeholder
           except json.decoder.JSONDecodeError:
             pass
           except pydantic.ValidationError:
             pass
         else:
           try:
-            result.parsed = json.loads(result.text)
+            if result.text is not None:
+              result.parsed = json.loads(result.text)
           # may not be a valid json per stream response
           except json.decoder.JSONDecodeError:
             pass
@@ -2972,6 +3195,14 @@ class GenerateContentResponseDict(TypedDict, total=False):
 
   candidates: Optional[list[CandidateDict]]
   """Response variations returned by the model.
+      """
+
+  create_time: Optional[datetime.datetime]
+  """Timestamp when the request is made to the server.
+      """
+
+  response_id: Optional[str]
+  """Identifier for each response.
       """
 
   model_version: Optional[str]
@@ -3251,6 +3482,11 @@ class GenerateImagesConfig(_common.BaseModel):
       description="""Number of images to generate.
       """,
   )
+  aspect_ratio: Optional[str] = Field(
+      default=None,
+      description="""Aspect ratio of the generated images.
+      """,
+  )
   guidance_scale: Optional[float] = Field(
       default=None,
       description="""Controls how much the model adheres to the text prompt. Large
@@ -3276,7 +3512,8 @@ class GenerateImagesConfig(_common.BaseModel):
   )
   include_safety_attributes: Optional[bool] = Field(
       default=None,
-      description="""Whether to report the safety scores of each image in the response.
+      description="""Whether to report the safety scores of each generated image and
+      the positive prompt in the response.
       """,
   )
   include_rai_reason: Optional[bool] = Field(
@@ -3306,11 +3543,6 @@ class GenerateImagesConfig(_common.BaseModel):
       description="""Whether to add a watermark to the generated images.
       """,
   )
-  aspect_ratio: Optional[str] = Field(
-      default=None,
-      description="""Aspect ratio of the generated images.
-      """,
-  )
   enhance_prompt: Optional[bool] = Field(
       default=None,
       description="""Whether to use the prompt rewriting logic.
@@ -3336,6 +3568,10 @@ class GenerateImagesConfigDict(TypedDict, total=False):
   """Number of images to generate.
       """
 
+  aspect_ratio: Optional[str]
+  """Aspect ratio of the generated images.
+      """
+
   guidance_scale: Optional[float]
   """Controls how much the model adheres to the text prompt. Large
       values increase output and prompt alignment, but may compromise image
@@ -3356,7 +3592,8 @@ class GenerateImagesConfigDict(TypedDict, total=False):
       """
 
   include_safety_attributes: Optional[bool]
-  """Whether to report the safety scores of each image in the response.
+  """Whether to report the safety scores of each generated image and
+      the positive prompt in the response.
       """
 
   include_rai_reason: Optional[bool]
@@ -3379,10 +3616,6 @@ class GenerateImagesConfigDict(TypedDict, total=False):
 
   add_watermark: Optional[bool]
   """Whether to add a watermark to the generated images.
-      """
-
-  aspect_ratio: Optional[str]
-  """Aspect ratio of the generated images.
       """
 
   enhance_prompt: Optional[bool]
@@ -3460,18 +3693,23 @@ class Image(_common.BaseModel):
   """Image."""
 
   @classmethod
-  def from_file(cls, *, location: str) -> 'Image':
+  def from_file(
+      cls, *, location: str, mime_type: Optional[str] = None
+  ) -> 'Image':
     """Lazy-loads an image from a local file or Google Cloud Storage.
 
     Args:
         location: The local path or Google Cloud Storage URI from which to load
           the image.
+        mime_type: The MIME type of the image. If not provided, the MIME type
+          will be automatically determined.
 
     Returns:
         A loaded image as an `Image` object.
     """
     import urllib
     import pathlib
+    import mimetypes
 
     parsed_url = urllib.parse.urlparse(location)
     if (
@@ -3490,7 +3728,10 @@ class Image(_common.BaseModel):
 
     # Load image from local path
     image_bytes = pathlib.Path(location).read_bytes()
-    image = cls(image_bytes=image_bytes)
+
+    if not mime_type:
+      mime_type, _ = mimetypes.guess_type(location)
+    image = cls(image_bytes=image_bytes, mime_type=mime_type)
     return image
 
   def show(self):
@@ -3507,7 +3748,8 @@ class Image(_common.BaseModel):
       IPython_display.display(self._pil_image)
 
   @property
-  def _pil_image(self) -> 'PIL_Image.Image':
+  def _pil_image(self) -> 'PIL_Image':
+    PIL_Image: Optional[builtin_types.ModuleType]
     try:
       from PIL import Image as PIL_Image
     except ImportError:
@@ -3520,6 +3762,8 @@ class Image(_common.BaseModel):
             'The PIL module is not available. Please install the Pillow'
             ' package. `pip install pillow`'
         )
+      if self.image_bytes is None:
+        raise ValueError('The image bytes are not set.')
       self._loaded_image = PIL_Image.open(io.BytesIO(self.image_bytes))
     return self._loaded_image
 
@@ -3531,6 +3775,8 @@ class Image(_common.BaseModel):
     """
     import pathlib
 
+    if self.image_bytes is None:
+      raise ValueError('The image bytes are not set.')
     pathlib.Path(location).write_bytes(self.image_bytes)
 
 
@@ -3580,6 +3826,45 @@ class ImageDict(TypedDict, total=False):
 ImageOrDict = Union[Image, ImageDict]
 
 
+class SafetyAttributes(_common.BaseModel):
+  """Safety attributes of a GeneratedImage or the user-provided prompt."""
+
+  categories: Optional[list[str]] = Field(
+      default=None,
+      description="""List of RAI categories.
+      """,
+  )
+  scores: Optional[list[float]] = Field(
+      default=None,
+      description="""List of scores of each categories.
+      """,
+  )
+  content_type: Optional[str] = Field(
+      default=None,
+      description="""Internal use only.
+      """,
+  )
+
+
+class SafetyAttributesDict(TypedDict, total=False):
+  """Safety attributes of a GeneratedImage or the user-provided prompt."""
+
+  categories: Optional[list[str]]
+  """List of RAI categories.
+      """
+
+  scores: Optional[list[float]]
+  """List of scores of each categories.
+      """
+
+  content_type: Optional[str]
+  """Internal use only.
+      """
+
+
+SafetyAttributesOrDict = Union[SafetyAttributes, SafetyAttributesDict]
+
+
 class GeneratedImage(_common.BaseModel):
   """An output image."""
 
@@ -3592,6 +3877,12 @@ class GeneratedImage(_common.BaseModel):
       default=None,
       description="""Responsible AI filter reason if the image is filtered out of the
       response.
+      """,
+  )
+  safety_attributes: Optional[SafetyAttributes] = Field(
+      default=None,
+      description="""Safety attributes of the image. Lists of RAI categories and their
+      scores of each content.
       """,
   )
   enhanced_prompt: Optional[str] = Field(
@@ -3614,6 +3905,11 @@ class GeneratedImageDict(TypedDict, total=False):
       response.
       """
 
+  safety_attributes: Optional[SafetyAttributesDict]
+  """Safety attributes of the image. Lists of RAI categories and their
+      scores of each content.
+      """
+
   enhanced_prompt: Optional[str]
   """The rewritten prompt used for the image generation if the prompt
       enhancer is enabled.
@@ -3631,6 +3927,12 @@ class GenerateImagesResponse(_common.BaseModel):
       description="""List of generated images.
       """,
   )
+  positive_prompt_safety_attributes: Optional[SafetyAttributes] = Field(
+      default=None,
+      description="""Safety attributes of the positive prompt. Only populated if
+      ``include_safety_attributes`` is set to True.
+      """,
+  )
 
 
 class GenerateImagesResponseDict(TypedDict, total=False):
@@ -3638,6 +3940,11 @@ class GenerateImagesResponseDict(TypedDict, total=False):
 
   generated_images: Optional[list[GeneratedImageDict]]
   """List of generated images.
+      """
+
+  positive_prompt_safety_attributes: Optional[SafetyAttributesDict]
+  """Safety attributes of the positive prompt. Only populated if
+      ``include_safety_attributes`` is set to True.
       """
 
 
@@ -3776,7 +4083,8 @@ class _ReferenceImageAPI(_common.BaseModel):
       default=None, description="""The id of the reference image."""
   )
   reference_type: Optional[str] = Field(
-      default=None, description="""The type of the reference image."""
+      default=None,
+      description="""The type of the reference image. Only set by the SDK.""",
   )
   mask_image_config: Optional[MaskReferenceConfig] = Field(
       default=None,
@@ -3806,7 +4114,7 @@ class _ReferenceImageAPIDict(TypedDict, total=False):
   """The id of the reference image."""
 
   reference_type: Optional[str]
-  """The type of the reference image."""
+  """The type of the reference image. Only set by the SDK."""
 
   mask_image_config: Optional[MaskReferenceConfigDict]
   """Configuration for the mask reference image."""
@@ -3845,6 +4153,11 @@ class EditImageConfig(_common.BaseModel):
       description="""Number of images to generate.
       """,
   )
+  aspect_ratio: Optional[str] = Field(
+      default=None,
+      description="""Aspect ratio of the generated images.
+      """,
+  )
   guidance_scale: Optional[float] = Field(
       default=None,
       description="""Controls how much the model adheres to the text prompt. Large
@@ -3870,7 +4183,8 @@ class EditImageConfig(_common.BaseModel):
   )
   include_safety_attributes: Optional[bool] = Field(
       default=None,
-      description="""Whether to report the safety scores of each image in the response.
+      description="""Whether to report the safety scores of each generated image and
+      the positive prompt in the response.
       """,
   )
   include_rai_reason: Optional[bool] = Field(
@@ -3899,6 +4213,11 @@ class EditImageConfig(_common.BaseModel):
       default=None,
       description="""Describes the editing mode for the request.""",
   )
+  base_steps: Optional[int] = Field(
+      default=None,
+      description="""The number of sampling steps. A higher value has better image
+      quality, while a lower value has better latency.""",
+  )
 
 
 class EditImageConfigDict(TypedDict, total=False):
@@ -3917,6 +4236,10 @@ class EditImageConfigDict(TypedDict, total=False):
 
   number_of_images: Optional[int]
   """Number of images to generate.
+      """
+
+  aspect_ratio: Optional[str]
+  """Aspect ratio of the generated images.
       """
 
   guidance_scale: Optional[float]
@@ -3939,7 +4262,8 @@ class EditImageConfigDict(TypedDict, total=False):
       """
 
   include_safety_attributes: Optional[bool]
-  """Whether to report the safety scores of each image in the response.
+  """Whether to report the safety scores of each generated image and
+      the positive prompt in the response.
       """
 
   include_rai_reason: Optional[bool]
@@ -3962,6 +4286,10 @@ class EditImageConfigDict(TypedDict, total=False):
 
   edit_mode: Optional[EditMode]
   """Describes the editing mode for the request."""
+
+  base_steps: Optional[int]
+  """The number of sampling steps. A higher value has better image
+      quality, while a lower value has better latency."""
 
 
 EditImageConfigOrDict = Union[EditImageConfig, EditImageConfigDict]
@@ -4812,6 +5140,344 @@ class ComputeTokensResponseDict(TypedDict, total=False):
 
 ComputeTokensResponseOrDict = Union[
     ComputeTokensResponse, ComputeTokensResponseDict
+]
+
+
+class GenerateVideosConfig(_common.BaseModel):
+  """Configuration for generating videos."""
+
+  http_options: Optional[HttpOptions] = Field(
+      default=None, description="""Used to override HTTP request options."""
+  )
+  number_of_videos: Optional[int] = Field(
+      default=None, description="""Number of output videos."""
+  )
+  output_gcs_uri: Optional[str] = Field(
+      default=None,
+      description="""The gcs bucket where to save the generated videos.""",
+  )
+  fps: Optional[int] = Field(
+      default=None, description="""Frames per second for video generation."""
+  )
+  duration_seconds: Optional[int] = Field(
+      default=None,
+      description="""Duration of the clip for video generation in seconds.""",
+  )
+  seed: Optional[int] = Field(
+      default=None,
+      description="""The RNG seed. If RNG seed is exactly same for each request with unchanged inputs, the prediction results will be consistent. Otherwise, a random RNG seed will be used each time to produce a different result.""",
+  )
+  aspect_ratio: Optional[str] = Field(
+      default=None,
+      description="""The aspect ratio for the generated video. 16:9 (landscape) and 9:16 (portrait) are supported.""",
+  )
+  resolution: Optional[str] = Field(
+      default=None,
+      description="""The resolution for the generated video. 1280x720, 1920x1080 are supported.""",
+  )
+  person_generation: Optional[str] = Field(
+      default=None,
+      description="""Whether allow to generate person videos, and restrict to specific ages. Supported values are: dont_allow, allow_adult.""",
+  )
+  pubsub_topic: Optional[str] = Field(
+      default=None,
+      description="""The pubsub topic where to publish the video generation progress.""",
+  )
+  negative_prompt: Optional[str] = Field(
+      default=None,
+      description="""Optional field in addition to the text content. Negative prompts can be explicitly stated here to help generate the video.""",
+  )
+  enhance_prompt: Optional[bool] = Field(
+      default=None, description="""Whether to use the prompt rewriting logic."""
+  )
+
+
+class GenerateVideosConfigDict(TypedDict, total=False):
+  """Configuration for generating videos."""
+
+  http_options: Optional[HttpOptionsDict]
+  """Used to override HTTP request options."""
+
+  number_of_videos: Optional[int]
+  """Number of output videos."""
+
+  output_gcs_uri: Optional[str]
+  """The gcs bucket where to save the generated videos."""
+
+  fps: Optional[int]
+  """Frames per second for video generation."""
+
+  duration_seconds: Optional[int]
+  """Duration of the clip for video generation in seconds."""
+
+  seed: Optional[int]
+  """The RNG seed. If RNG seed is exactly same for each request with unchanged inputs, the prediction results will be consistent. Otherwise, a random RNG seed will be used each time to produce a different result."""
+
+  aspect_ratio: Optional[str]
+  """The aspect ratio for the generated video. 16:9 (landscape) and 9:16 (portrait) are supported."""
+
+  resolution: Optional[str]
+  """The resolution for the generated video. 1280x720, 1920x1080 are supported."""
+
+  person_generation: Optional[str]
+  """Whether allow to generate person videos, and restrict to specific ages. Supported values are: dont_allow, allow_adult."""
+
+  pubsub_topic: Optional[str]
+  """The pubsub topic where to publish the video generation progress."""
+
+  negative_prompt: Optional[str]
+  """Optional field in addition to the text content. Negative prompts can be explicitly stated here to help generate the video."""
+
+  enhance_prompt: Optional[bool]
+  """Whether to use the prompt rewriting logic."""
+
+
+GenerateVideosConfigOrDict = Union[
+    GenerateVideosConfig, GenerateVideosConfigDict
+]
+
+
+class _GenerateVideosParameters(_common.BaseModel):
+  """Class that represents the parameters for generating an image."""
+
+  model: Optional[str] = Field(
+      default=None,
+      description="""ID of the model to use. For a list of models, see `Google models
+    <https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models>`_.""",
+  )
+  prompt: Optional[str] = Field(
+      default=None,
+      description="""The text prompt for generating the videos. Optional for image to video use cases.""",
+  )
+  image: Optional[Image] = Field(
+      default=None,
+      description="""The input image for generating the videos.
+      Optional if prompt is provided.""",
+  )
+  config: Optional[GenerateVideosConfig] = Field(
+      default=None, description="""Configuration for generating videos."""
+  )
+
+
+class _GenerateVideosParametersDict(TypedDict, total=False):
+  """Class that represents the parameters for generating an image."""
+
+  model: Optional[str]
+  """ID of the model to use. For a list of models, see `Google models
+    <https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models>`_."""
+
+  prompt: Optional[str]
+  """The text prompt for generating the videos. Optional for image to video use cases."""
+
+  image: Optional[ImageDict]
+  """The input image for generating the videos.
+      Optional if prompt is provided."""
+
+  config: Optional[GenerateVideosConfigDict]
+  """Configuration for generating videos."""
+
+
+_GenerateVideosParametersOrDict = Union[
+    _GenerateVideosParameters, _GenerateVideosParametersDict
+]
+
+
+class Video(_common.BaseModel):
+  """A generated video."""
+
+  uri: Optional[str] = Field(
+      default=None, description="""Path to another storage."""
+  )
+  video_bytes: Optional[bytes] = Field(
+      default=None, description="""Video bytes."""
+  )
+  mime_type: Optional[str] = Field(
+      default=None, description="""Video encoding, for example "video/mp4"."""
+  )
+
+  def save(
+      self,
+      path: str,
+  ) -> None:
+    """Saves the video to a file.
+
+    Args:
+        path: Local path where to save the video.
+    """
+    import pathlib  # pylint: disable=g-import-not-at-top
+
+    if not self.video_bytes:
+      raise NotImplementedError('Saving remote videos is not supported.')
+
+    pathlib.Path(path).write_bytes(self.video_bytes)
+
+  def show(self):
+    """Shows the video.
+
+    If the video has no mime_type, it is assumed to be video/mp4.
+
+    This method only works in a notebook environment.
+    """
+    if self.uri and not self.video_bytes:
+      return ValueError('Showing remote videos is not supported.')
+    if not self.video_bytes:
+      return ValueError('Video has no bytes.')
+
+    mime_type = self.mime_type or 'video/mp4'
+
+    try:
+      from IPython import display as IPython_display
+    except ImportError:
+      IPython_display = None
+
+    if IPython_display:
+      IPython_display.display(
+          IPython_display.Video(
+              data=self.video_bytes, mimetype=mime_type, embed=True
+          )
+      )
+
+  def __repr__(self):
+    video_bytes = '<video_bytes>' if self.video_bytes else 'None'
+    return (
+        f'Video(uri={self.uri}, video_bytes={video_bytes},'
+        f' mime_type={self.mime_type})'
+    )
+
+
+class VideoDict(TypedDict, total=False):
+  """A generated video."""
+
+  uri: Optional[str]
+  """Path to another storage."""
+
+  video_bytes: Optional[bytes]
+  """Video bytes."""
+
+  mime_type: Optional[str]
+  """Video encoding, for example "video/mp4"."""
+
+
+VideoOrDict = Union[Video, VideoDict]
+
+
+class GeneratedVideo(_common.BaseModel):
+  """A generated video."""
+
+  video: Optional[Video] = Field(
+      default=None, description="""The output video"""
+  )
+
+
+class GeneratedVideoDict(TypedDict, total=False):
+  """A generated video."""
+
+  video: Optional[VideoDict]
+  """The output video"""
+
+
+GeneratedVideoOrDict = Union[GeneratedVideo, GeneratedVideoDict]
+
+
+class GenerateVideosResponse(_common.BaseModel):
+  """Response with generated videos."""
+
+  generated_videos: Optional[list[GeneratedVideo]] = Field(
+      default=None, description="""List of the generated videos"""
+  )
+  rai_media_filtered_count: Optional[int] = Field(
+      default=None,
+      description="""Returns if any videos were filtered due to RAI policies.""",
+  )
+  rai_media_filtered_reasons: Optional[list[str]] = Field(
+      default=None, description="""Returns rai failure reasons if any."""
+  )
+
+
+class GenerateVideosResponseDict(TypedDict, total=False):
+  """Response with generated videos."""
+
+  generated_videos: Optional[list[GeneratedVideoDict]]
+  """List of the generated videos"""
+
+  rai_media_filtered_count: Optional[int]
+  """Returns if any videos were filtered due to RAI policies."""
+
+  rai_media_filtered_reasons: Optional[list[str]]
+  """Returns rai failure reasons if any."""
+
+
+GenerateVideosResponseOrDict = Union[
+    GenerateVideosResponse, GenerateVideosResponseDict
+]
+
+
+class GenerateVideosOperation(_common.BaseModel):
+  """A video generation operation.
+
+  Use the following code to refresh the operation:
+
+  ```
+  operation = client.operations.get(operation)
+  ```
+  """
+
+  name: Optional[str] = Field(
+      default=None,
+      description="""The server-assigned name, which is only unique within the same service that originally returns it. If you use the default HTTP mapping, the `name` should be a resource name ending with `operations/{unique_id}`.""",
+  )
+  metadata: Optional[dict[str, Any]] = Field(
+      default=None,
+      description="""Service-specific metadata associated with the operation. It typically contains progress information and common metadata such as create time. Some services might not provide such metadata.  Any method that returns a long-running operation should document the metadata type, if any.""",
+  )
+  done: Optional[bool] = Field(
+      default=None,
+      description="""If the value is `false`, it means the operation is still in progress. If `true`, the operation is completed, and either `error` or `response` is available.""",
+  )
+  error: Optional[dict[str, Any]] = Field(
+      default=None,
+      description="""The error result of the operation in case of failure or cancellation.""",
+  )
+  response: Optional[dict[str, Any]] = Field(
+      default=None,
+      description="""The normal response of the operation in case of success.""",
+  )
+  result: Optional[GenerateVideosResponse] = Field(
+      default=None, description="""The generated videos."""
+  )
+
+
+class GenerateVideosOperationDict(TypedDict, total=False):
+  """A video generation operation.
+
+  Use the following code to refresh the operation:
+
+  ```
+  operation = client.operations.get(operation)
+  ```
+  """
+
+  name: Optional[str]
+  """The server-assigned name, which is only unique within the same service that originally returns it. If you use the default HTTP mapping, the `name` should be a resource name ending with `operations/{unique_id}`."""
+
+  metadata: Optional[dict[str, Any]]
+  """Service-specific metadata associated with the operation. It typically contains progress information and common metadata such as create time. Some services might not provide such metadata.  Any method that returns a long-running operation should document the metadata type, if any."""
+
+  done: Optional[bool]
+  """If the value is `false`, it means the operation is still in progress. If `true`, the operation is completed, and either `error` or `response` is available."""
+
+  error: Optional[dict[str, Any]]
+  """The error result of the operation in case of failure or cancellation."""
+
+  response: Optional[dict[str, Any]]
+  """The normal response of the operation in case of success."""
+
+  result: Optional[GenerateVideosResponseDict]
+  """The generated videos."""
+
+
+GenerateVideosOperationOrDict = Union[
+    GenerateVideosOperation, GenerateVideosOperationDict
 ]
 
 
@@ -7744,19 +8410,17 @@ class RawReferenceImage(_common.BaseModel):
       default=None, description="""The id of the reference image."""
   )
   reference_type: Optional[str] = Field(
-      default=None, description="""The type of the reference image."""
+      default=None,
+      description="""The type of the reference image. Only set by the SDK.""",
   )
 
-  def __init__(
-      self,
-      reference_image: Optional[Image] = None,
-      reference_id: Optional[int] = None,
-  ):
-    super().__init__(
-        reference_image=reference_image,
-        reference_id=reference_id,
-        reference_type='REFERENCE_TYPE_RAW',
-    )
+  @pydantic.model_validator(mode='before')
+  @classmethod
+  def _validate_mask_image_config(self, values):
+    if 'reference_type' in values:
+      raise ValueError('Cannot set internal reference_type field directly.')
+    values['reference_type'] = 'REFERENCE_TYPE_RAW'
+    return values
 
 
 class RawReferenceImageDict(TypedDict, total=False):
@@ -7774,7 +8438,7 @@ class RawReferenceImageDict(TypedDict, total=False):
   """The id of the reference image."""
 
   reference_type: Optional[str]
-  """The type of the reference image."""
+  """The type of the reference image. Only set by the SDK."""
 
 
 RawReferenceImageOrDict = Union[RawReferenceImage, RawReferenceImageDict]
@@ -7800,7 +8464,8 @@ class MaskReferenceImage(_common.BaseModel):
       default=None, description="""The id of the reference image."""
   )
   reference_type: Optional[str] = Field(
-      default=None, description="""The type of the reference image."""
+      default=None,
+      description="""The type of the reference image. Only set by the SDK.""",
   )
   config: Optional[MaskReferenceConfig] = Field(
       default=None,
@@ -7811,18 +8476,15 @@ class MaskReferenceImage(_common.BaseModel):
       default=None, description=""""""
   )
 
-  def __init__(
-      self,
-      reference_image: Optional[Image] = None,
-      reference_id: Optional[int] = None,
-      config: Optional['MaskReferenceConfig'] = None,
-  ):
-    super().__init__(
-        reference_image=reference_image,
-        reference_id=reference_id,
-        reference_type='REFERENCE_TYPE_MASK',
-    )
-    self.mask_image_config = config
+  @pydantic.model_validator(mode='before')
+  @classmethod
+  def _validate_mask_image_config(self, values):
+    config = values.get('config', None)
+    values['mask_image_config'] = config
+    if 'reference_type' in values:
+      raise ValueError('Cannot set internal reference_type field directly.')
+    values['reference_type'] = 'REFERENCE_TYPE_MASK'
+    return values
 
 
 class MaskReferenceImageDict(TypedDict, total=False):
@@ -7844,7 +8506,7 @@ class MaskReferenceImageDict(TypedDict, total=False):
   """The id of the reference image."""
 
   reference_type: Optional[str]
-  """The type of the reference image."""
+  """The type of the reference image. Only set by the SDK."""
 
   config: Optional[MaskReferenceConfigDict]
   """Configuration for the mask reference image."""
@@ -7873,7 +8535,8 @@ class ControlReferenceImage(_common.BaseModel):
       default=None, description="""The id of the reference image."""
   )
   reference_type: Optional[str] = Field(
-      default=None, description="""The type of the reference image."""
+      default=None,
+      description="""The type of the reference image. Only set by the SDK.""",
   )
   config: Optional[ControlReferenceConfig] = Field(
       default=None,
@@ -7884,18 +8547,15 @@ class ControlReferenceImage(_common.BaseModel):
       default=None, description=""""""
   )
 
-  def __init__(
-      self,
-      reference_image: Optional[Image] = None,
-      reference_id: Optional[int] = None,
-      config: Optional['ControlReferenceConfig'] = None,
-  ):
-    super().__init__(
-        reference_image=reference_image,
-        reference_id=reference_id,
-        reference_type='REFERENCE_TYPE_CONTROL',
-    )
-    self.control_image_config = config
+  @pydantic.model_validator(mode='before')
+  @classmethod
+  def _validate_mask_image_config(self, values):
+    config = values.get('config', None)
+    values['control_image_config'] = config
+    if 'reference_type' in values:
+      raise ValueError('Cannot set internal reference_type field directly.')
+    values['reference_type'] = 'REFERENCE_TYPE_CONTROL'
+    return values
 
 
 class ControlReferenceImageDict(TypedDict, total=False):
@@ -7917,7 +8577,7 @@ class ControlReferenceImageDict(TypedDict, total=False):
   """The id of the reference image."""
 
   reference_type: Optional[str]
-  """The type of the reference image."""
+  """The type of the reference image. Only set by the SDK."""
 
   config: Optional[ControlReferenceConfigDict]
   """Configuration for the control reference image."""
@@ -7946,7 +8606,8 @@ class StyleReferenceImage(_common.BaseModel):
       default=None, description="""The id of the reference image."""
   )
   reference_type: Optional[str] = Field(
-      default=None, description="""The type of the reference image."""
+      default=None,
+      description="""The type of the reference image. Only set by the SDK.""",
   )
   config: Optional[StyleReferenceConfig] = Field(
       default=None,
@@ -7957,18 +8618,15 @@ class StyleReferenceImage(_common.BaseModel):
       default=None, description=""""""
   )
 
-  def __init__(
-      self,
-      reference_image: Optional[Image] = None,
-      reference_id: Optional[int] = None,
-      config: Optional['StyleReferenceConfig'] = None,
-  ):
-    super().__init__(
-        reference_image=reference_image,
-        reference_id=reference_id,
-        reference_type='REFERENCE_TYPE_STYLE',
-    )
-    self.style_image_config = config
+  @pydantic.model_validator(mode='before')
+  @classmethod
+  def _validate_mask_image_config(self, values):
+    config = values.get('config', None)
+    values['style_image_config'] = config
+    if 'reference_type' in values:
+      raise ValueError('Cannot set internal reference_type field directly.')
+    values['reference_type'] = 'REFERENCE_TYPE_STYLE'
+    return values
 
 
 class StyleReferenceImageDict(TypedDict, total=False):
@@ -7988,7 +8646,7 @@ class StyleReferenceImageDict(TypedDict, total=False):
   """The id of the reference image."""
 
   reference_type: Optional[str]
-  """The type of the reference image."""
+  """The type of the reference image. Only set by the SDK."""
 
   config: Optional[StyleReferenceConfigDict]
   """Configuration for the style reference image."""
@@ -8015,7 +8673,8 @@ class SubjectReferenceImage(_common.BaseModel):
       default=None, description="""The id of the reference image."""
   )
   reference_type: Optional[str] = Field(
-      default=None, description="""The type of the reference image."""
+      default=None,
+      description="""The type of the reference image. Only set by the SDK.""",
   )
   config: Optional[SubjectReferenceConfig] = Field(
       default=None,
@@ -8026,18 +8685,15 @@ class SubjectReferenceImage(_common.BaseModel):
       default=None, description=""""""
   )
 
-  def __init__(
-      self,
-      reference_image: Optional[Image] = None,
-      reference_id: Optional[int] = None,
-      config: Optional['SubjectReferenceConfig'] = None,
-  ):
-    super().__init__(
-        reference_image=reference_image,
-        reference_id=reference_id,
-        reference_type='REFERENCE_TYPE_SUBJECT',
-    )
-    self.subject_image_config = config
+  @pydantic.model_validator(mode='before')
+  @classmethod
+  def _validate_mask_image_config(self, values):
+    config = values.get('config', None)
+    values['subject_image_config'] = config
+    if 'reference_type' in values:
+      raise ValueError('Cannot set internal reference_type field directly.')
+    values['reference_type'] = 'REFERENCE_TYPE_SUBJECT'
+    return values
 
 
 class SubjectReferenceImageDict(TypedDict, total=False):
@@ -8057,7 +8713,7 @@ class SubjectReferenceImageDict(TypedDict, total=False):
   """The id of the reference image."""
 
   reference_type: Optional[str]
-  """The type of the reference image."""
+  """The type of the reference image. Only set by the SDK."""
 
   config: Optional[SubjectReferenceConfigDict]
   """Configuration for the subject reference image."""
@@ -8278,7 +8934,7 @@ The following fields are supported:
       Note: only text should be used in parts and content in each part will be
       in a separate paragraph.""",
   )
-  tools: Optional[list[Tool]] = Field(
+  tools: Optional[ToolListUnion] = Field(
       default=None,
       description=""" A list of `Tools` the model may use to generate the next response.
 
@@ -8315,7 +8971,7 @@ The following fields are supported:
       Note: only text should be used in parts and content in each part will be
       in a separate paragraph."""
 
-  tools: Optional[list[ToolDict]]
+  tools: Optional[ToolListUnionDict]
   """ A list of `Tools` the model may use to generate the next response.
 
       A `Tool` is a piece of code that enables the system to interact with
@@ -8527,7 +9183,7 @@ class LiveConnectConfig(_common.BaseModel):
       Note: only text should be used in parts and content in each part will be
       in a separate paragraph.""",
   )
-  tools: Optional[list[Tool]] = Field(
+  tools: Optional[ToolListUnion] = Field(
       default=None,
       description="""A list of `Tools` the model may use to generate the next response.
 
@@ -8557,7 +9213,7 @@ class LiveConnectConfigDict(TypedDict, total=False):
       Note: only text should be used in parts and content in each part will be
       in a separate paragraph."""
 
-  tools: Optional[list[ToolDict]]
+  tools: Optional[ToolListUnionDict]
   """A list of `Tools` the model may use to generate the next response.
 
       A `Tool` is a piece of code that enables the system to interact with

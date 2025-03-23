@@ -29,7 +29,7 @@ import google.auth
 from requests.exceptions import HTTPError
 
 from . import errors
-from ._api_client import ApiClient
+from ._api_client import BaseApiClient
 from ._api_client import HttpOptions
 from ._api_client import HttpRequest
 from ._api_client import HttpResponse
@@ -60,6 +60,10 @@ def _redact_request_headers(headers):
       redacted_headers[header_name] = _redact_language_label(
           _redact_version_numbers(header_value)
       )
+    elif header_name.lower() == 'x-goog-user-project':
+      continue
+    elif header_name.lower() == 'authorization':
+      continue
     else:
       redacted_headers[header_name] = header_value
   return redacted_headers
@@ -105,7 +109,8 @@ def _redact_project_location_path(path: str) -> str:
     return path
 
 
-def _redact_request_body(body: dict[str, object]) -> dict[str, object]:
+def _redact_request_body(body: dict[str, object]):
+  """Redacts fields in the request body in place."""
   for key, value in body.items():
     if isinstance(value, str):
       body[key] = _redact_project_location_path(value)
@@ -114,7 +119,8 @@ def _redact_request_body(body: dict[str, object]) -> dict[str, object]:
 def redact_http_request(http_request: HttpRequest):
   http_request.headers = _redact_request_headers(http_request.headers)
   http_request.url = _redact_request_url(http_request.url)
-  _redact_request_body(http_request.data)
+  if not isinstance(http_request.data, bytes):
+    _redact_request_body(http_request.data)
 
 
 def _current_file_path_and_line():
@@ -175,7 +181,7 @@ class ReplayFile(BaseModel):
   interactions: list[ReplayInteraction]
 
 
-class ReplayApiClient(ApiClient):
+class ReplayApiClient(BaseApiClient):
   """For integration testing, send recorded response or records a response."""
 
   def __init__(
@@ -298,13 +304,26 @@ class ReplayApiClient(ApiClient):
           status_code=http_response.status_code,
           sdk_response_segments=[],
       )
-    else:
+    elif isinstance(http_response, errors.APIError):
       response = ReplayResponse(
           headers=dict(http_response.response.headers),
           body_segments=[http_response._to_replay_record()],
           status_code=http_response.code,
           sdk_response_segments=[],
       )
+    elif isinstance(http_response, bytes):
+      response = ReplayResponse(
+          headers={},
+          body_segments=[],
+          byte_segments=[http_response],
+          sdk_response_segments=[],
+      )
+    else:
+      raise ValueError(
+          'Unsupported http_response type: ' + str(type(http_response))
+      )
+    if self.replay_session is None:
+      raise ValueError('No replay session found.')
     self.replay_session.interactions.append(
         ReplayInteraction(request=request, response=response)
     )
@@ -326,7 +345,8 @@ class ReplayApiClient(ApiClient):
     request_data_copy = copy.deepcopy(http_request.data)
     # Both the request and recorded request must be redacted before comparing
     # so that the comparison is fair.
-    _redact_request_body(request_data_copy)
+    if not isinstance(request_data_copy, bytes):
+      _redact_request_body(request_data_copy)
 
     actual_request_body = [request_data_copy]
     expected_request_body = interaction.request.body_segments
@@ -336,9 +356,11 @@ class ReplayApiClient(ApiClient):
         f'Expected: {expected_request_body}'
     )
 
-  def _build_response_from_replay(self, http_request: HttpRequest):
+  def _build_response_from_replay(self, http_request: HttpRequest) -> HttpResponse:
     redact_http_request(http_request)
 
+    if self.replay_session is None:
+      raise ValueError('No replay session found.')
     interaction = self.replay_session.interactions[self._replay_index]
     # Replay is on the right side of the assert so the diff makes more sense.
     self._match_request(http_request, interaction)
@@ -357,6 +379,8 @@ class ReplayApiClient(ApiClient):
   def _verify_response(self, response_model: BaseModel):
     if self._mode == 'api':
       return
+    if not self.replay_session:
+      raise ValueError('No replay session found.')
     # replay_index is advanced in _build_response_from_replay, so we need to -1.
     interaction = self.replay_session.interactions[self._replay_index - 1]
     if self._should_update_replay():
@@ -409,7 +433,35 @@ class ReplayApiClient(ApiClient):
     else:
       return self._build_response_from_replay(http_request)
 
-  def upload_file(self, file_path: Union[str, io.IOBase], upload_url: str, upload_size: int):
+  async def _async_request(
+      self,
+      http_request: HttpRequest,
+      stream: bool = False,
+  ) -> HttpResponse:
+    self._initialize_replay_session_if_not_loaded()
+    if self._should_call_api():
+      _debug_print('api mode request: %s' % http_request)
+      try:
+        result = await super()._async_request(http_request, stream)
+      except errors.APIError as e:
+        self._record_interaction(http_request, e)
+        raise e
+      if stream:
+        result_segments = []
+        async for segment in result.async_segments():
+          result_segments.append(json.dumps(segment))
+        result = HttpResponse(result.headers, result_segments)
+        self._record_interaction(http_request, result)
+        # Need to return a RecordedResponse that rebuilds the response
+        # segments since the stream has been consumed.
+      else:
+        self._record_interaction(http_request, result)
+      _debug_print('api mode result: %s' % result.json)
+      return result
+    else:
+      return self._build_response_from_replay(http_request)
+
+  def upload_file(self, file_path: Union[str, io.IOBase], upload_url: str, upload_size: int) -> HttpResponse:
     if isinstance(file_path, io.IOBase):
       offset = file_path.tell()
       content = file_path.read()
@@ -425,24 +477,9 @@ class ReplayApiClient(ApiClient):
           method='POST', url='', data={'file_path': file_path}, headers={}
       )
     if self._should_call_api():
+      result: Union[str, HttpResponse]
       try:
         result = super().upload_file(file_path, upload_url, upload_size)
-      except HTTPError as e:
-        result = HttpResponse(
-            e.response.headers, [json.dumps({'reason': e.response.reason})]
-        )
-        result.status_code = e.response.status_code
-        raise e
-      self._record_interaction(request, HttpResponse({}, [json.dumps(result)]))
-      return result
-    else:
-      return self._build_response_from_replay(request).json
-
-  def _download_file_request(self, request):
-    self._initialize_replay_session_if_not_loaded()
-    if self._should_call_api():
-      try:
-        result = super()._download_file_request(request)
       except HTTPError as e:
         result = HttpResponse(
             e.response.headers, [json.dumps({'reason': e.response.reason})]
@@ -454,3 +491,77 @@ class ReplayApiClient(ApiClient):
     else:
       return self._build_response_from_replay(request)
 
+  async def async_upload_file(
+      self,
+      file_path: Union[str, io.IOBase],
+      upload_url: str,
+      upload_size: int,
+  ) -> HttpResponse:
+    if isinstance(file_path, io.IOBase):
+      offset = file_path.tell()
+      content = file_path.read()
+      file_path.seek(offset, os.SEEK_SET)
+      request = HttpRequest(
+          method='POST',
+          url='',
+          data={'bytes': base64.b64encode(content).decode('utf-8')},
+          headers={},
+      )
+    else:
+      request = HttpRequest(
+          method='POST', url='', data={'file_path': file_path}, headers={}
+      )
+    if self._should_call_api():
+      result: HttpResponse
+      try:
+        result = await super().async_upload_file(
+            file_path, upload_url, upload_size
+        )
+      except HTTPError as e:
+        result = HttpResponse(
+            e.response.headers, [json.dumps({'reason': e.response.reason})]
+        )
+        result.status_code = e.response.status_code
+        raise e
+      self._record_interaction(request, result)
+      return result
+    else:
+      return self._build_response_from_replay(request)
+
+  def download_file(self, path: str, http_options: HttpOptions):
+    self._initialize_replay_session_if_not_loaded()
+    request = self._build_request(
+        'get', path=path, request_dict={}, http_options=http_options
+    )
+    if self._should_call_api():
+      try:
+        result = super().download_file(path, http_options)
+      except HTTPError as e:
+        result = HttpResponse(
+            e.response.headers, [json.dumps({'reason': e.response.reason})]
+        )
+        result.status_code = e.response.status_code
+        raise e
+      self._record_interaction(request, result)
+      return result
+    else:
+      return self._build_response_from_replay(request).byte_stream[0]
+
+  async def async_download_file(self, path: str, http_options):
+    self._initialize_replay_session_if_not_loaded()
+    request = self._build_request(
+        'get', path=path, request_dict={}, http_options=http_options
+    )
+    if self._should_call_api():
+      try:
+        result = await super().async_download_file(path, http_options)
+      except HTTPError as e:
+        result = HttpResponse(
+            e.response.headers, [json.dumps({'reason': e.response.reason})]
+        )
+        result.status_code = e.response.status_code
+        raise e
+      self._record_interaction(request, result)
+      return result
+    else:
+      return self._build_response_from_replay(request).byte_stream[0]

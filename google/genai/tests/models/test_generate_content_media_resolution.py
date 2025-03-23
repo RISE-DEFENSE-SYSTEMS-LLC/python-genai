@@ -21,46 +21,72 @@ test_table: list[pytest_helper.TestTableItem] = [
     pytest_helper.TestTableItem(
         name='test_video_audio_uri_with_media_resolution',
         parameters=types._GenerateContentParameters(
-            model='gemini-2.0-flash-exp',
+            model='gemini-2.0-flash',
             contents=[
                 types.Content(
                     role='user',
-                    parts=[types.Part.from_text(
-                        text='Is the audio related to the video? '
-                        'If so, how? '
-                        'What are the common themes? '
-                        'What are the different emphases?'
-                    )],
+                    parts=[
+                        types.Part.from_text(
+                            text=(
+                                'Is the audio related to the video? '
+                                'If so, how? '
+                                'What are the common themes? '
+                                'What are the different emphases?'
+                            )
+                        )
+                    ],
                 ),
                 types.Content(
                     role='user',
-                    parts=[types.Part.from_uri(
-                        file_uri='gs://cloud-samples-data/generative-ai/video/pixel8.mp4',
-                        mime_type='video/mp4',
-                    )],
+                    parts=[
+                        types.Part.from_uri(
+                            file_uri='gs://cloud-samples-data/generative-ai/video/pixel8.mp4',
+                            mime_type='video/mp4',
+                        )
+                    ],
                 ),
                 types.Content(
                     role='user',
-                    parts=[types.Part.from_uri(
-                        file_uri='gs://cloud-samples-data/generative-ai/audio/pixel.mp3',
-                        mime_type='audio/mpeg',
-                    )],
+                    parts=[
+                        types.Part.from_uri(
+                            file_uri='gs://cloud-samples-data/generative-ai/audio/pixel.mp3',
+                            mime_type='audio/mpeg',
+                        )
+                    ],
                 ),
             ],
             config={
                 'system_instruction': types.Content(
                     role='user',
-                    parts=[types.Part.from_text(
-                        text='you are a helpful assistant for people with '
-                        'visual and hearing disabilities.'
-                    )],
+                    parts=[
+                        types.Part.from_text(
+                            text=(
+                                'you are a helpful assistant for people with '
+                                'visual and hearing disabilities.'
+                            )
+                        )
+                    ],
                 ),
-              'media_resolution': 'MEDIA_RESOLUTION_LOW',
+                'media_resolution': 'MEDIA_RESOLUTION_LOW',
             },
         ),
-        exception_if_mldev='not supported',
+        exception_if_mldev='400',
     )
 ]
+
+
+def test_low_media_resolution(client):
+  with pytest_helper.exception_if_vertex(client, ValueError):
+    file = client.files.upload(file='tests/data/google.png')
+    response = client.models.generate_content(
+        model='gemini-2.0-flash',
+        contents=[file, 'Describe the image.'],
+        config=types.GenerateContentConfig(
+            media_resolution='MEDIA_RESOLUTION_LOW',
+            http_options= types.HttpOptions(api_version='v1alpha', base_url='https://generativelanguage.googleapis.com')
+            ),
+        )
+    assert response.text
 
 
 pytestmark = pytest_helper.setup(

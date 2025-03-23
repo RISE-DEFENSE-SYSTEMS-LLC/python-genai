@@ -28,7 +28,7 @@ test_table: list[pytest_helper.TestTableItem] = [
         name='test_simple_prompt',
         parameters=types._GenerateImagesParameters(
             model=IMAGEN_MODEL_LATEST,
-            prompt='Create a blue circle',
+            prompt='Red skateboard',
             config={'number_of_images': 1, 'output_mime_type': 'image/jpeg'},
         ),
     ),
@@ -36,7 +36,7 @@ test_table: list[pytest_helper.TestTableItem] = [
         name='test_simple_prompt_001',
         parameters=types._GenerateImagesParameters(
             model='imagen-3.0-generate-001',
-            prompt='Create a blue circle',
+            prompt='Red skateboard',
             # 001 model does not support prompt enhancement.
             config={'number_of_images': 1, 'output_mime_type': 'image/jpeg'},
         ),
@@ -46,19 +46,19 @@ test_table: list[pytest_helper.TestTableItem] = [
         exception_if_mldev='not supported in Gemini API',
         parameters=types._GenerateImagesParameters(
             model=IMAGEN_MODEL_LATEST,
-            prompt='Robot holding a red skateboard',
+            prompt='Red skateboard',
             config={
                 'aspect_ratio': '1:1',
-                'negative_prompt': 'human',
                 'guidance_scale': 15.0,
                 'safety_filter_level': 'BLOCK_MEDIUM_AND_ABOVE',
                 'number_of_images': 1,
                 'person_generation': 'DONT_ALLOW',
-                'include_safety_attributes': False,
+                'include_safety_attributes': True,
                 'include_rai_reason': True,
                 'output_mime_type': 'image/jpeg',
                 'output_compression_quality': 80,
-                # The below parameters are not supported in Google AI.
+                # The below parameters are not supported in Gemini Developer API.
+                'negative_prompt': 'human',
                 'add_watermark': False,
                 'seed': 1337,
                 'language': 'en',
@@ -107,12 +107,11 @@ test_table: list[pytest_helper.TestTableItem] = [
     ),
     pytest_helper.TestTableItem(
         name='test_all_vertexai_config_safety_filter_level_enum_parameters',
-        exception_if_mldev='enum value is not supported',
         parameters=types._GenerateImagesParameters(
             model=IMAGEN_MODEL_LATEST,
             prompt='Robot holding a red skateboard',
             config={
-                'safety_filter_level': 'BLOCK_NONE',
+                'safety_filter_level': 'BLOCK_LOW_AND_ABOVE',
                 'number_of_images': 1,
                 'output_mime_type': 'image/jpeg',
             },
@@ -120,12 +119,11 @@ test_table: list[pytest_helper.TestTableItem] = [
     ),
     pytest_helper.TestTableItem(
         name='test_all_vertexai_config_safety_filter_level_enum_parameters_2',
-        exception_if_mldev='enum value is not supported',
         parameters=types._GenerateImagesParameters(
             model=IMAGEN_MODEL_LATEST,
             prompt='Robot holding a red skateboard',
             config={
-                'safety_filter_level': 'block_none',
+                'safety_filter_level': 'block_low_and_above',
                 'number_of_images': 1,
                 'output_mime_type': 'image/jpeg',
             },
@@ -133,12 +131,11 @@ test_table: list[pytest_helper.TestTableItem] = [
     ),
     pytest_helper.TestTableItem(
         name='test_all_vertexai_config_safety_filter_level_enum_parameters_3',
-        exception_if_mldev='enum value is not supported',
         parameters=types._GenerateImagesParameters(
             model=IMAGEN_MODEL_LATEST,
             prompt='Robot holding a red skateboard',
             config={
-                'safety_filter_level': types.SafetyFilterLevel.BLOCK_NONE,
+                'safety_filter_level': types.SafetyFilterLevel.BLOCK_LOW_AND_ABOVE,
                 'number_of_images': 1,
                 'output_mime_type': 'image/jpeg',
             },
@@ -148,14 +145,14 @@ test_table: list[pytest_helper.TestTableItem] = [
         name='test_all_mldev_config_parameters',
         parameters=types._GenerateImagesParameters(
             model=IMAGEN_MODEL_LATEST,
-            prompt='Robot holding a red skateboard',
+            prompt='Red skateboard',
             config={
                 'aspect_ratio': '1:1',
                 'guidance_scale': 15.0,
-                'safety_filter_level': 'BLOCK_MEDIUM_AND_ABOVE',
+                'safety_filter_level': 'BLOCK_LOW_AND_ABOVE',
                 'number_of_images': 1,
                 'person_generation': 'DONT_ALLOW',
-                'include_safety_attributes': False,
+                'include_safety_attributes': True,
                 'include_rai_reason': True,
                 'output_mime_type': 'image/jpeg',
                 'output_compression_quality': 80,
@@ -175,7 +172,16 @@ pytestmark = pytest_helper.setup(
 async def test_simple_prompt_async(client):
   response = await client.aio.models.generate_images(
       model=IMAGEN_MODEL_LATEST,
-      prompt='Create a blue circle',
-      config={'number_of_images': 1, 'output_mime_type': 'image/jpeg'},
+      prompt='Red skateboard',
+      config={
+          'number_of_images': 1,
+          'output_mime_type': 'image/jpeg',
+          'include_safety_attributes': True,
+          'include_rai_reason': True,
+      },
   )
+
   assert response.generated_images[0].image.image_bytes
+  # TODO(tangmatthew): Re-enable this check once the bug is fixed.
+  assert len(response.generated_images) == 1
+  assert response.positive_prompt_safety_attributes.content_type == 'Positive Prompt'

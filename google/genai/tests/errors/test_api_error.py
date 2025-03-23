@@ -20,15 +20,17 @@ End to end tests should be in models/test_generate_content.py.
 """
 
 
+import json
 from typing import cast
 
-import requests
+import httpx
 
 from ... import errors
 
 
 def test_constructor_code_none_error_in_json_code_in_error():
-  class FakeResponse(requests.Response):
+
+  class FakeResponse(httpx.Response):
 
     def json(self):
       return {
@@ -41,7 +43,7 @@ def test_constructor_code_none_error_in_json_code_in_error():
 
   actual_error = errors.APIError(
       None,
-      FakeResponse(),
+      FakeResponse(status_code=400),
   )
 
   assert actual_error.code == 400
@@ -57,7 +59,8 @@ def test_constructor_code_none_error_in_json_code_in_error():
 
 
 def test_constructor_code_none_error_in_json_code_outside_error():
-  class FakeResponse(requests.Response):
+
+  class FakeResponse(httpx.Response):
 
     def json(self):
       return {
@@ -73,7 +76,7 @@ def test_constructor_code_none_error_in_json_code_outside_error():
 
   actual_error = errors.APIError(
       None,
-      FakeResponse(),
+      FakeResponse(status_code=400),
   )
 
   assert actual_error.code == 400
@@ -90,7 +93,8 @@ def test_constructor_code_none_error_in_json_code_outside_error():
 
 
 def test_constructor_code_not_present():
-  class FakeResponse(requests.Response):
+
+  class FakeResponse(httpx.Response):
 
     def json(self):
       return {
@@ -102,7 +106,7 @@ def test_constructor_code_not_present():
 
   actual_error = errors.APIError(
       None,
-      FakeResponse(),
+      FakeResponse(status_code=400),
   )
 
   assert actual_error.code is None
@@ -117,7 +121,8 @@ def test_constructor_code_not_present():
 
 
 def test_constructor_code_exist_error_in_json():
-  class FakeResponse(requests.Response):
+
+  class FakeResponse(httpx.Response):
 
     def json(self):
       return {
@@ -130,7 +135,7 @@ def test_constructor_code_exist_error_in_json():
 
   actual_error = errors.APIError(
       400,
-      FakeResponse(),
+      FakeResponse(status_code=400),
   )
 
   assert actual_error.code == 400
@@ -146,7 +151,8 @@ def test_constructor_code_exist_error_in_json():
 
 
 def test_constructor_error_not_in_json():
-  class FakeResponse(requests.Response):
+
+  class FakeResponse(httpx.Response):
 
     def json(self):
       return {
@@ -157,7 +163,7 @@ def test_constructor_error_not_in_json():
 
   actual_error = errors.APIError(
       400,
-      FakeResponse(),
+      FakeResponse(status_code=400),
   )
 
   assert actual_error.code == 400
@@ -171,7 +177,8 @@ def test_constructor_error_not_in_json():
 
 
 def test_constructor_error_in_json_status_outside_error():
-  class FakeResponse(requests.Response):
+
+  class FakeResponse(httpx.Response):
 
     def json(self):
       return {
@@ -185,7 +192,7 @@ def test_constructor_error_in_json_status_outside_error():
 
   actual_error = errors.APIError(
       400,
-      FakeResponse(),
+      FakeResponse(status_code=400),
   )
 
   assert actual_error.code == 400
@@ -202,7 +209,8 @@ def test_constructor_error_in_json_status_outside_error():
 
 
 def test_constructor_status_not_present():
-  class FakeResponse(requests.Response):
+
+  class FakeResponse(httpx.Response):
 
     def json(self):
       return {
@@ -214,7 +222,7 @@ def test_constructor_status_not_present():
 
   actual_error = errors.APIError(
       400,
-      FakeResponse(),
+      FakeResponse(status_code=400),
   )
 
   assert actual_error.code == 400
@@ -229,7 +237,8 @@ def test_constructor_status_not_present():
 
 
 def test_constructor_error_in_json_message_outside_error():
-  class FakeResponse(requests.Response):
+
+  class FakeResponse(httpx.Response):
 
     def json(self):
       return {
@@ -243,7 +252,7 @@ def test_constructor_error_in_json_message_outside_error():
 
   actual_error = errors.APIError(
       400,
-      FakeResponse(),
+      FakeResponse(status_code=400),
   )
 
   assert actual_error.code == 400
@@ -260,7 +269,8 @@ def test_constructor_error_in_json_message_outside_error():
 
 
 def test_constructor_message_not_present():
-  class FakeResponse(requests.Response):
+
+  class FakeResponse(httpx.Response):
 
     def json(self):
       return {
@@ -272,7 +282,7 @@ def test_constructor_message_not_present():
 
   actual_error = errors.APIError(
       400,
-      FakeResponse(),
+      FakeResponse(status_code=400),
   )
 
   assert actual_error.code == 400
@@ -287,46 +297,42 @@ def test_constructor_message_not_present():
 
 
 def test_constructor_code_exist_json_decoder_error():
-  class FakeResponse(requests.Response):
+
+  class FakeResponse(httpx.Response):
 
     def json(self):
-      raise requests.exceptions.JSONDecodeError(
-          'json decode error', 'json string', 10
-      )
+      raise json.decoder.JSONDecodeError('json decode error', 'json string', 10)
 
   actual_error = errors.APIError(
-      400,
-      FakeResponse(),
+      200,
+      FakeResponse(status_code=200),
   )
-  assert actual_error.code == 400
-  assert (
-      actual_error.message == ''
-  )  # response.text defaults to '' in requests.Response.
-  assert actual_error.status is None
+  assert actual_error.code == 200
+  assert not actual_error.message
+  assert actual_error.status == 'OK'
   assert actual_error.details == {
       'message': '',
-      'status': None,
+      'status': 'OK',
   }
 
 
 def test_constructor_code_none_json_decoder_error():
-  class FakeResponse(requests.Response):
+
+  class FakeResponse(httpx.Response):
 
     def json(self):
-      raise requests.exceptions.JSONDecodeError(
-          'json decode error', 'json string', 10
-      )
+      raise httpx.ResponseNotRead()
 
   actual_error = errors.APIError(
       None,
-      FakeResponse(),
+      FakeResponse(status_code=200),
   )
   assert actual_error.code is None
   assert (
-      actual_error.message == ''
+      actual_error.message == 'Response not read'
   )  # response.text defaults to '' in requests.Response.
-  assert actual_error.status is None
+  assert actual_error.status == 'OK'
   assert actual_error.details == {
-      'message': '',
-      'status': None,
+      'message': 'Response not read',
+      'status': 'OK',
   }

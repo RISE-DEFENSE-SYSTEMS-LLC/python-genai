@@ -91,10 +91,10 @@ def client(use_vertex):
     )
 
 
-def test_build_schema_for_list_of_pydantic_schema():
+def test_build_schema_for_list_of_pydantic_schema(client):
   """Tests _build_schema() when list[pydantic.BaseModel] is provided to response_schema."""
 
-  list_schema = _transformers.t_schema(None, CountryInfo).model_dump()
+  list_schema = _transformers.t_schema(client, CountryInfo).model_dump()
 
   assert isinstance(list_schema, dict)
 
@@ -112,10 +112,10 @@ def test_build_schema_for_list_of_pydantic_schema():
     assert list_schema['required'] == list(country_info_fields.keys())
 
 
-def test_build_schema_for_list_of_nested_pydantic_schema():
+def test_build_schema_for_list_of_nested_pydantic_schema(client):
   """Tests _build_schema() when list[pydantic.BaseModel] is provided to response_schema and the pydantic.BaseModel has nested pydantic fields."""
   list_schema = _transformers.t_schema(
-      None, CountryInfoWithCurrency
+      client, CountryInfoWithCurrency
   ).model_dump()
 
   assert isinstance(list_schema, dict)
@@ -132,9 +132,9 @@ def test_build_schema_for_list_of_nested_pydantic_schema():
     assert field_name in currency_info_fields
 
 
-def test_t_schema_for_pydantic_schema():
+def test_t_schema_for_pydantic_schema(client):
   """Tests t_schema when pydantic.BaseModel is passed to response_schema."""
-  transformed_schema = _transformers.t_schema(None, CountryInfo)
+  transformed_schema = _transformers.t_schema(client, CountryInfo)
   assert isinstance(transformed_schema, types.Schema)
   for schema_property in transformed_schema.properties:
     assert schema_property in country_info_fields
@@ -143,9 +143,9 @@ def test_t_schema_for_pydantic_schema():
     )
 
 
-def test_t_schema_for_list_of_pydantic_schema():
+def test_t_schema_for_list_of_pydantic_schema(client):
   """Tests t_schema when list[pydantic.BaseModel] is passed to response_schema."""
-  transformed_schema = _transformers.t_schema(None, list[CountryInfo])
+  transformed_schema = _transformers.t_schema(client, list[CountryInfo])
   assert isinstance(transformed_schema, types.Schema)
   assert isinstance(transformed_schema.items, types.Schema)
 
@@ -156,9 +156,9 @@ def test_t_schema_for_list_of_pydantic_schema():
     )
 
 
-def test_t_schema_for_null_fields():
+def test_t_schema_for_null_fields(client):
   """Tests t_schema when null fields are present."""
-  transformed_schema = _transformers.t_schema(None, CountryInfoWithNullFields)
+  transformed_schema = _transformers.t_schema(client, CountryInfoWithNullFields)
   assert isinstance(transformed_schema, types.Schema)
   assert transformed_schema.properties['population'].nullable
 
@@ -206,38 +206,169 @@ def test_schema_with_default_value_raises_for_mldev(client):
         type='OBJECT',
         required=['name'],
         title='CountryInfoWithDefaultValue',
+        property_ordering=['name', 'population'],
     )
 
     assert transformed_schema_vertex == expected_schema_vertex
+
+
+def test_schema_with_any_of(client):
+  transformed_schema = _transformers.t_schema(
+      client, CountryInfoWithAnyOf
+  )
+  expected_schema_mldev = types.Schema(
+      properties={
+          'name': types.Schema(
+              type='STRING',
+          ),
+          'restaurants_per_capita': types.Schema(
+              any_of=[
+                  types.Schema(type='INTEGER'),
+                  types.Schema(type='NUMBER'),
+              ],
+          ),
+      },
+      type='OBJECT',
+      required=['name', 'restaurants_per_capita'],
+      property_ordering=['name', 'restaurants_per_capita'],
+  )
+  expected_schema_vertex = types.Schema(
+      properties={
+          'name': types.Schema(
+              type='STRING',
+              title='Name',
+          ),
+          'restaurants_per_capita': types.Schema(
+              any_of=[
+                  types.Schema(type='INTEGER'),
+                  types.Schema(type='NUMBER'),
+              ],
+              title='Restaurants Per Capita',
+          ),
+      },
+      type='OBJECT',
+      required=['name', 'restaurants_per_capita'],
+      title='CountryInfoWithAnyOf',
+      property_ordering=['name', 'restaurants_per_capita'],
+  )
+
+  if client.vertexai:
+    assert transformed_schema == expected_schema_vertex
+  else:
+    assert transformed_schema == expected_schema_mldev
 
 
 @pytest.mark.parametrize('use_vertex', [True, False])
-def test_schema_with_any_of_raises_for_mldev(client):
-  if not client.vertexai:
-    with pytest.raises(ValueError) as e:
-      _transformers.t_schema(client._api_client, CountryInfoWithAnyOf)
-    assert 'AnyOf is not supported' in str(e)
-  else:
-    transformed_schema_vertex = _transformers.t_schema(
-        client._api_client, CountryInfoWithAnyOf
-    )
-    expected_schema_vertex = types.Schema(
-        properties={
-            'name': types.Schema(
-                type='STRING',
-                title='Name',
-            ),
-            'restaurants_per_capita': types.Schema(
-                any_of=[
-                    types.Schema(type='INTEGER'),
-                    types.Schema(type='NUMBER'),
-                ],
-                title='Restaurants Per Capita',
-            ),
+def test_complex_dict_schema_with_anyof_is_unchanged(client):
+  """When a dict schema is passed to process_schema, the only change should be camel-casing anyOf."""
+  if client.vertexai:
+    dict_schema = {
+        'type': 'OBJECT',
+        'title': 'Fruit Basket',
+        'description': 'A structured representation of a fruit basket',
+        'required': ['fruit'],
+        'properties': {
+            'fruit': {
+                'type': 'ARRAY',
+                'description': 'An ordered list of the fruit in the basket',
+                'items': {
+                    'description': 'A piece of fruit',
+                    'anyOf': [
+                        {
+                            'title': 'Apple',
+                            'description': 'Describes an apple',
+                            'type': 'OBJECT',
+                            'properties': {
+                                'type': {
+                                    'type': 'STRING',
+                                    'description': "Always 'apple'",
+                                },
+                                'color': {
+                                    'type': 'STRING',
+                                    'description': (
+                                        "The color of the apple (e.g., 'red')"
+                                    ),
+                                },
+                            },
+                            'propertyOrdering': ['type', 'color'],
+                            'required': ['type', 'color'],
+                        },
+                        {
+                            'title': 'Orange',
+                            'description': 'Describes an orange',
+                            'type': 'OBJECT',
+                            'properties': {
+                                'type': {
+                                    'type': 'STRING',
+                                    'description': "Always 'orange'",
+                                },
+                                'size': {
+                                    'type': 'STRING',
+                                    'description': (
+                                        'The size of the orange (e.g.,'
+                                        " 'medium')"
+                                    ),
+                                },
+                            },
+                            'propertyOrdering': ['type', 'size'],
+                            'required': ['type', 'size'],
+                        },
+                    ],
+                },
+            }
         },
-        type='OBJECT',
-        required=['name', 'restaurants_per_capita'],
-        title='CountryInfoWithAnyOf',
-    )
+    }
 
-    assert transformed_schema_vertex == expected_schema_vertex
+    schema_before = copy.deepcopy(dict_schema)
+    _transformers.process_schema(dict_schema, client)
+
+    assert schema_before == dict_schema
+
+
+def test_t_schema_does_not_change_property_ordering_if_set(client):
+  """Tests t_schema doesn't overwrite the property_ordering field if already set."""
+
+  schema = CountryInfo.model_json_schema()
+  custom_property_ordering = ['code', 'symbol', 'name']
+  schema['property_ordering'] = custom_property_ordering
+
+  transformed_schema = _transformers.t_schema(client, schema)
+  assert transformed_schema.property_ordering == custom_property_ordering
+
+
+def test_t_schema_does_not_set_property_ordering_for_json_schema(client):
+  """Tests t_schema doesn't set the property_ordering field for json schemas."""
+
+  schema = CountryInfo.model_json_schema()
+
+  transformed_schema = _transformers.t_schema(client, schema)
+  assert transformed_schema.property_ordering is None
+
+
+def test_t_schema_does_not_set_property_ordering_for_schema_type(client):
+  """Tests t_schema doesn't set the property_ordering field for Schema types."""
+
+  schema = types.Schema(
+      properties={
+          'name': types.Schema(
+              type='STRING',
+              title='Name',
+          ),
+          'population': types.Schema(
+              type='INTEGER',
+              default=0,
+              title='Population',
+          ),
+      },
+      type='OBJECT',
+      required=['name'],
+      title='CountryInfoWithDefaultValue',
+  )
+
+  if client.vertexai:
+    transformed_schema = _transformers.t_schema(client, schema)
+    assert transformed_schema.property_ordering is None
+  else:
+    with pytest.raises(ValueError) as e:
+      _transformers.t_schema(client, schema)
+    assert 'Default value is not supported' in str(e)

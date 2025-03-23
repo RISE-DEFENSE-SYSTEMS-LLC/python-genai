@@ -272,7 +272,7 @@ test_table: list[pytest_helper.TestTableItem] = [
                             types.PartDict({
                                 'file_data': {
                                     'file_uri': (
-                                        'gs://vertexsdk-gcs/test_video2.mp4'
+                                        'gs://generativeai-downloads/videos/Big_Buck_Bunny.mp4'
                                     ),
                                     'mime_type': 'video/mp4',
                                 },
@@ -351,7 +351,7 @@ pytest_plugins = ('pytest_asyncio',)
 
 
 def test_empty_part(client):
-  with pytest.raises(ValueError):
+  with pytest_helper.exception_if_vertex(client, errors.ClientError):
     client.models.generate_content(
         model='gemini-1.5-flash-001',
         contents=t.t_contents(None, ['']),
@@ -399,6 +399,61 @@ def test_from_uri(client):
     )
 
 
+def test_user_content_text(client):
+  response = client.models.generate_content(
+      model='gemini-1.5-flash',
+      contents=types.UserContent(parts='why is the sky blue?'),
+  )
+  assert response.text
+
+
+def test_user_content_part(client):
+  with pytest_helper.exception_if_mldev(client, errors.ClientError):
+    response = client.models.generate_content(
+        model='gemini-1.5-flash',
+        contents=types.UserContent(
+            parts=[
+                'what is this image about?',
+                types.Part.from_uri(
+                    file_uri='gs://generativeai-downloads/images/scones.jpg',
+                    mime_type='image/jpeg',
+                ),
+            ]
+        ),
+    )
+    assert response.text
+
+
+def test_model_content_text(client):
+  with pytest_helper.exception_if_mldev(client, errors.ClientError):
+    response = client.models.generate_content(
+        model='gemini-1.5-flash',
+        contents=[
+            types.UserContent(
+                parts=[
+                    'what is this image about?',
+                    types.Part.from_uri(
+                        file_uri=(
+                            'gs://generativeai-downloads/images/scones.jpg'
+                        ),
+                        mime_type='image/jpeg',
+                    ),
+                ]
+            ),
+            types.ModelContent(
+                parts=(
+                    'The image is about a cozy breakfast or brunch with'
+                    ' blueberry scones, coffee, and fresh flowers.'
+                )
+            ),
+            types.UserContent(
+                parts='Is this a good environment for a family gathering?'
+            ),
+        ],
+    )
+    assert response.text
+
+
 def test_from_uploaded_file_uri(client):
   with pytest_helper.exception_if_vertex(client, errors.ClientError):
     client.models.generate_content(
@@ -411,7 +466,6 @@ def test_from_uploaded_file_uri(client):
             ),
         ],
     )
-
 
 def test_from_uri_error(client):
   # missing mime_type

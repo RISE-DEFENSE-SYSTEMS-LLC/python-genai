@@ -3,7 +3,7 @@ requires = ["setuptools", "wheel"]
 
 [project]
 name = "google-genai"
-version = "1.0.0"
+version = "1.7.0"
 description = "GenAI Python SDK"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -26,10 +26,13 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "google-auth>=2.14.1, <3.0.0dev",
-    "pydantic>=2.0.0, <3.0.0dev",
-    "requests>=2.28.1, <3.0.0dev",
-    "websockets>=13.0, <15.0dev",
+    "anyio>=4.8.0, <5.0.0",
+    "google-auth>=2.14.1, <3.0.0",
+    "httpx>=0.28.1, <1.0.0",
+    "pydantic>=2.0.0, <3.0.0",
+    "requests>=2.28.1, <3.0.0",
+    "websockets>=13.0.0, <15.1.0",
+    "typing-extensions>=4.11.0, <5.0.0",
 ]
 
 [project.urls]
@@ -40,3 +43,4 @@ packages = [
     "google",
     "google.genai",
 ]
+include-package-data = true
