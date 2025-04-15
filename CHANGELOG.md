@@ -1,5 +1,87 @@
 # Changelog
 
+## [1.10.0](https://github.com/googleapis/python-genai/compare/v1.9.0...v1.10.0) (2025-04-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* remove Part.from_video_metadata
+
+### Features
+
+* Add adapter size 2 for Gemini 2.0 Tuning ([959df89](https://github.com/googleapis/python-genai/commit/959df89e322efd4ed74f1c186a293b6f8fb7ee6e))
+* Add domain to Web GroundingChunk ([9a75d48](https://github.com/googleapis/python-genai/commit/9a75d4885056771625f1af9ae735d61db9e7dc3c))
+* Add session resumption. ([6e80ae7](https://github.com/googleapis/python-genai/commit/6e80ae77eba78607b91429168da20d618af9d3f0))
+* Add thinking_budget to ThinkingConfig for Gemini Thinking Models ([71863e0](https://github.com/googleapis/python-genai/commit/71863e00c187c4eb9a379780f0a871235768a555))
+* Add traffic type to GenerateContentResponseUsageMetadata ([925f983](https://github.com/googleapis/python-genai/commit/925f9836e1a6baf65adb5de5154870c1ec2621db))
+* Add transcription support for MLDev ([c0a1b5c](https://github.com/googleapis/python-genai/commit/c0a1b5cdc169bfed61c69ffd8a08c0bffaaa80ce))
+* Add types for configurable speech detection ([ae4ecee](https://github.com/googleapis/python-genai/commit/ae4ecee9562b71a292b61c63d33853568ab37f14))
+* Add types to support continuous sessions with a sliding window ([7099e1e](https://github.com/googleapis/python-genai/commit/7099e1e99ce9e80a3b1080dcd1141a51e1990fea))
+* Add UsageMetadata to LiveServerMessage ([018846a](https://github.com/googleapis/python-genai/commit/018846ae3e1f73d91522b8606e611152b7f63002))
+* Added support for Context Window Compression ([e5c646c](https://github.com/googleapis/python-genai/commit/e5c646c106407a6c424a5d7fc6d022a395bac430))
+* Populate X-Server-Timeout header when a request timeout is set. ([2af7b67](https://github.com/googleapis/python-genai/commit/2af7b67e811ae2b2e920c090006b2054193b404b))
+* Remove experimental warnings for generate_videos and operations ([fa6007a](https://github.com/googleapis/python-genai/commit/fa6007ae9fb755e7cafb518985c96d54dd572a43))
+* Remove experimental warnings from live api. ([007d1b1](https://github.com/googleapis/python-genai/commit/007d1b15e31000366352449c39679848dd7f622a))
+* Support media resolution ([ef64f8a](https://github.com/googleapis/python-genai/commit/ef64f8a49171f2e05765ed7141d8ee51409a1ac7))
+
+
+### Bug Fixes
+
+* Remove Part.from_video_metadata ([c0947ab](https://github.com/googleapis/python-genai/commit/c0947ab20f75ed1c67985f7a2fdea04a5959de68))
+* Upload file should support timeout (in milliseconds) configuration from http_options per request or from client ([5f3e895](https://github.com/googleapis/python-genai/commit/5f3e895276c94536ed797bcdca7fb913f95ddb01))
+
+
+### Miscellaneous Chores
+
+* Release 1.10.0 ([c136e41](https://github.com/googleapis/python-genai/commit/c136e4164d0c26530871c56653e21fc30caee511))
+
+## [1.9.0](https://github.com/googleapis/python-genai/compare/v1.8.0...v1.9.0) (2025-04-01)
+
+
+### Features
+
+* Add specialized `send` methods to the live api ([9c4e4dc](https://github.com/googleapis/python-genai/commit/9c4e4dcdff508230f635c5d174486b08b87f86c9))
+* Expose generation_complete, input/output_transcription & input/output_audio_transcription to SDK for Vertex Live API ([e5685ad](https://github.com/googleapis/python-genai/commit/e5685adc7a064b511ddb490ef0aaf27f3070775f))
+* Merge GenerationConfig into LiveConnectConfig ([d22535e](https://github.com/googleapis/python-genai/commit/d22535e700178f27e458a02868cd2c06d5470e34))
+
+
+### Bug Fixes
+
+* Make response arg in APIError class constructor optional. [#572](https://github.com/googleapis/python-genai/issues/572) ([7b3f4a4](https://github.com/googleapis/python-genai/commit/7b3f4a4c50646c29293c0196b471b7bf3a29f102))
+
+
+### Documentation
+
+* Docstring improvements ([77f5356](https://github.com/googleapis/python-genai/commit/77f53566bbff3a715d2c7e5e83ada61ffd80ac96))
+
+## [1.8.0](https://github.com/googleapis/python-genai/compare/v1.7.0...v1.8.0) (2025-03-26)
+
+
+### Features
+
+* Add engine to VertexAISearch ([21f0394](https://github.com/googleapis/python-genai/commit/21f03941e23173d5c4bfce8551e9f64410a4cd95))
+* Add IMAGE_SAFTY enum value to FinishReason ([3a65fb0](https://github.com/googleapis/python-genai/commit/3a65fb0e841b183d42023aef37e22207cdc9829f))
+* Add MediaModalities for ModalityTokenCount ([fb2509c](https://github.com/googleapis/python-genai/commit/fb2509c471a42a3144d7b25e63be54d32608851c))
+* Add Veo 2 generate_videos support in Go SDK ([55b2923](https://github.com/googleapis/python-genai/commit/55b2923de0b925ad5487d1584331cb093773a325))
+* Allow title property to be sent to Gemini API. Gemini API now supports the title property, so it's ok to pass this onto both Vertex and Gemini API. ([f2f92a7](https://github.com/googleapis/python-genai/commit/f2f92a739a764f1eae20e932fdea6a3305305f77))
+* **chats:** Allow user to create chat session with list of ContentDict ([43c5379](https://github.com/googleapis/python-genai/commit/43c5379aa0a6da1f742ab0eada72cbff0b2bed40)), closes [#467](https://github.com/googleapis/python-genai/issues/467)
+* Move set event loop into try except logic when setting auth lock ([d04b6a6](https://github.com/googleapis/python-genai/commit/d04b6a65129960d6e70acec2879afbd8f7c5b0e0))
+* Save prompt safety attributes in dedicated field for generate_images ([e5bbb0e](https://github.com/googleapis/python-genai/commit/e5bbb0e6b77f12e7e6877ae0e976fda3f8beb604))
+* Support new UsageMetadata fields ([122cdc8](https://github.com/googleapis/python-genai/commit/122cdc86f1c7381f04f6c8ab3ea86409fcb85661))
+
+
+### Bug Fixes
+
+* Improve logging for response.parsed (fixes [#455](https://github.com/googleapis/python-genai/issues/455)) ([64012dd](https://github.com/googleapis/python-genai/commit/64012dd6a6c1877114100f52c10a45a7f7ff885e))
+* Schema transformer logic fix. ([f64bcba](https://github.com/googleapis/python-genai/commit/f64bcba552156c1f344f8c03932a24c0a4f9c222))
+* Set event loop before asyncio.Lock() to ensure threading safety ([be2d9c6](https://github.com/googleapis/python-genai/commit/be2d9c61176f8330166e7912e233fb07fa82e4a8))
+* Surface complete error details from backend ([38f5beb](https://github.com/googleapis/python-genai/commit/38f5bebba79182f78c4aa921861151626c79a84d))
+* **chats:** Raise error when `types.Content` is passed to `send_message()` to correctly adhere to type annotation. To migrate code previously passing `content = types.Content(...)` to `send_message()`, pass `content.parts` instead.
+
+### Documentation
+
+* Log warning to users that Part.from_video_metadata will be deprecated. ([2d12f54](https://github.com/googleapis/python-genai/commit/2d12f544bc3f8d1e2720855f0fe3519881baaeb0))
+
 ## [1.7.0](https://github.com/googleapis/python-genai/compare/v1.6.0...v1.7.0) (2025-03-18)
 
 
@@ -12,6 +94,7 @@
 ### Bug Fixes
 
 * **chats:** Fix duplicate history when appending AFC history ([e4b1d8a](https://github.com/googleapis/python-genai/commit/e4b1d8af03be5579ff6cb0ba42dd0d3d65126892))
+* **chats:** Raise error when `types.Content` is passed to `send_message()` to correctly adhere to type annotation. To migrate code previously passing `content = types.Content(...)` to `send_message()`, pass `content.parts` instead.
 * Fix incorrect casing of upload status and url headers in Files API. httpx.Response returns 'x-goog-upload-status', but we were checking for 'X-Goog-Upload-Status'. Also clean up upload_file and download_file requests. ([2ac5129](https://github.com/googleapis/python-genai/commit/2ac5129d4005d797f29df0a213e2455d7d730b43))
 
 
